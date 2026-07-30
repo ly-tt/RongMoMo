@@ -1,32 +1,11 @@
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
-import { ContactShadows, Environment, OrbitControls, RoundedBox } from '@react-three/drei'
-import { Suspense, useRef, useState } from 'react'
+import { Center, ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
 type Hit = {
   point: THREE.Vector3
   label: string
-}
-
-function Finger({
-  position,
-  rotation = [0, 0, 0],
-  length,
-  radius,
-  onHit,
-}: {
-  position: [number, number, number]
-  rotation?: [number, number, number]
-  length: number
-  radius: number
-  onHit: (event: ThreeEvent<MouseEvent>) => void
-}) {
-  return (
-    <mesh position={position} rotation={rotation} onClick={onHit} castShadow receiveShadow>
-      <capsuleGeometry args={[radius, length, 10, 20]} />
-      <meshStandardMaterial color="#dba88d" roughness={0.58} metalness={0.02} />
-    </mesh>
-  )
 }
 
 function HitMarker({ hit }: { hit: Hit }) {
@@ -50,51 +29,36 @@ function HitMarker({ hit }: { hit: Hit }) {
   )
 }
 
-function Hand({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
-  const registerHit = (part: string) => (event: ThreeEvent<MouseEvent>) => {
+function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
+  const { scene } = useGLTF('/models/hand.glb')
+  const hand = useMemo(() => scene.clone(true), [scene])
+
+  useEffect(() => {
+    hand.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return
+      object.castShadow = true
+      object.receiveShadow = true
+
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      materials.forEach((material) => {
+        if (!(material instanceof THREE.MeshStandardMaterial)) return
+        material.roughness = Math.max(material.roughness, 0.48)
+        material.metalness = 0
+        material.needsUpdate = true
+      })
+    })
+  }, [hand])
+
+  const registerHit = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
-    const localPoint = event.point.clone()
-    onHit({ point: localPoint, label: part })
+    onHit({ point: event.point.clone(), label: '手部' })
   }
 
   return (
-    <group rotation={[-0.25, 0.08, -0.1]} position={[0, -0.25, 0]}>
-      <RoundedBox
-        args={[1.72, 2.05, 0.48]}
-        radius={0.3}
-        smoothness={6}
-        position={[0, -0.1, 0]}
-        onClick={registerHit('掌心')}
-        castShadow
-        receiveShadow
-      >
-        <meshStandardMaterial color="#dda98f" roughness={0.62} />
-      </RoundedBox>
-
-      <Finger position={[-0.64, 1.45, 0]} length={1.05} radius={0.2} onHit={registerHit('小指')} />
-      <Finger position={[-0.22, 1.67, 0]} length={1.38} radius={0.21} onHit={registerHit('无名指')} />
-      <Finger position={[0.22, 1.74, 0]} length={1.52} radius={0.22} onHit={registerHit('中指')} />
-      <Finger position={[0.64, 1.55, 0]} length={1.2} radius={0.21} onHit={registerHit('食指')} />
-      <Finger
-        position={[1.03, 0.18, 0]}
-        rotation={[0, 0, -0.72]}
-        length={0.95}
-        radius={0.23}
-        onHit={registerHit('拇指')}
-      />
-
-      <RoundedBox
-        args={[1.15, 0.9, 0.43]}
-        radius={0.22}
-        smoothness={5}
-        position={[0, -1.46, 0]}
-        onClick={registerHit('手腕')}
-        castShadow
-      >
-        <meshStandardMaterial color="#d9a187" roughness={0.66} />
-      </RoundedBox>
-
-      {hit && <HitMarker hit={hit} />}
+    <group rotation={[-0.12, 0.08, -0.08]} scale={0.135} onClick={registerHit}>
+      <Center>
+        <primitive object={hand} />
+      </Center>
     </group>
   )
 }
@@ -114,9 +78,10 @@ function Scene({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
       />
       <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
       <Suspense fallback={null}>
-        <Hand onHit={onHit} hit={hit} />
+        <RealisticHand onHit={onHit} />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
+      {hit && <HitMarker hit={hit} />}
       <ContactShadows position={[0, -2.05, 0]} opacity={0.42} scale={7} blur={2.8} far={5} />
       <OrbitControls
         makeDefault
@@ -169,7 +134,7 @@ export default function App() {
 
         <div className="scene-badge">
           <span>01</span>
-          临时手部模型
+          写实手部模型
         </div>
 
         <div className="gesture-guide" aria-hidden="true">
@@ -202,3 +167,5 @@ export default function App() {
     </main>
   )
 }
+
+useGLTF.preload('/models/hand.glb')
