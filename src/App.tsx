@@ -1,9 +1,10 @@
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
 import { ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
-import { Suspense, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
-type NeedleResult = 'SUCCESS' | 'NEAR' | 'MISS'
+type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
+type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
 
 type Hit = {
   point: THREE.Vector3
@@ -13,6 +14,7 @@ type Hit = {
   correctSurface: boolean
   surfaceIssue: string | null
   result: NeedleResult
+  eventZone: EventZone
   needleNumber: number
 }
 
@@ -153,26 +155,107 @@ export function createTreatmentPlan(request: TreatmentPlanRequest = {}) {
 
 const RESULT_COPY: Record<
   NeedleResult,
-  { icon: string; title: string; message: string; accent: string }
+  { icon: string; title: string; message: string; accent: string; zone: string }
 > = {
   SUCCESS: {
     icon: '◎',
     title: '精准命中',
     message: '酸麻感轻轻扩散，这一针很漂亮。',
     accent: '#67edb0',
+    zone: '目标穴位',
   },
-  NEAR: {
+  BLOOD: {
+    icon: '●',
+    title: '扎到血管',
+    message: '红色液滴突然冒出，患者倒吸了一口凉气。',
+    accent: '#ff365f',
+    zone: '浅表血管区',
+  },
+  NERVE: {
+    icon: 'ϟ',
+    title: '神经刺激',
+    message: '一阵麻麻的电流穿过手掌，手指都抖了一下。',
+    accent: '#77a7ff',
+    zone: '神经敏感区',
+  },
+  BRUISE: {
     icon: '◌',
-    title: '稍有偏差',
-    message: '离穴位只差一点，患者悄悄皱了下眉。',
-    accent: '#ffb454',
+    title: '出现青紫',
+    message: '落点附近慢慢泛紫，这一针偏得有点微妙。',
+    accent: '#a878ff',
+    zone: '软组织区',
   },
-  MISS: {
-    icon: '×',
-    title: '扎偏了',
-    message: '这不是目标穴位，再观察一下光圈位置。',
-    accent: '#ff567f',
+  BONE: {
+    icon: '◆',
+    title: '碰到硬组织',
+    message: '针尖“叮”地弹了一下，角度明显不对。',
+    accent: '#f4dfb5',
+    zone: '硬组织区',
   },
+}
+
+function classifyNeedleEvent({
+  distance,
+  dx,
+  dy,
+  correctSurface,
+}: {
+  distance: number
+  dx: number
+  dy: number
+  correctSurface: boolean
+}): { result: NeedleResult; eventZone: EventZone } {
+  if (!correctSurface) return { result: 'BONE', eventZone: 'HARD_TISSUE' }
+  if (distance <= 0.82) return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
+  if (distance <= 1.5) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
+
+  const angle = Math.atan2(dy, dx)
+  if (angle >= -Math.PI / 3 && angle < Math.PI / 3) {
+    return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+  }
+  if (angle >= Math.PI / 3) {
+    return { result: 'NERVE', eventZone: 'NERVE_PATH' }
+  }
+  return { result: 'BONE', eventZone: 'HARD_TISSUE' }
+}
+
+function playNeedleSound(result: NeedleResult) {
+  const AudioContextClass =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!AudioContextClass) return
+
+  const context = new AudioContextClass()
+  const master = context.createGain()
+  master.gain.setValueAtTime(0.0001, context.currentTime)
+  master.gain.exponentialRampToValueAtTime(0.15, context.currentTime + 0.015)
+  master.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.72)
+  master.connect(context.destination)
+
+  const tones: Record<NeedleResult, Array<[number, number, OscillatorType]>> = {
+    SUCCESS: [[440, 660, 'sine']],
+    BLOOD: [[150, 85, 'sine'], [220, 120, 'triangle']],
+    NERVE: [[920, 1680, 'square'], [1380, 720, 'sawtooth']],
+    BRUISE: [[180, 110, 'sine']],
+    BONE: [[1450, 620, 'triangle'], [2100, 1100, 'sine']],
+  }
+
+  tones[result].forEach(([startFrequency, endFrequency, type], index) => {
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    const start = context.currentTime + index * 0.035
+    oscillator.type = type
+    oscillator.frequency.setValueAtTime(startFrequency, start)
+    oscillator.frequency.exponentialRampToValueAtTime(endFrequency, start + 0.38)
+    gain.gain.setValueAtTime(index === 0 ? 0.7 : 0.32, start)
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.48)
+    oscillator.connect(gain)
+    gain.connect(master)
+    oscillator.start(start)
+    oscillator.stop(start + 0.5)
+  })
+
+  window.setTimeout(() => void context.close(), 900)
 }
 
 function keepLeftHand(mesh: THREE.Mesh) {
@@ -291,22 +374,65 @@ function TargetMarker({ target }: { target: NeedleTarget }) {
 
 function Needle({ hit }: { hit: Hit }) {
   const needle = useRef<THREE.Group>(null)
+  const elapsed = useRef(0)
+  const coil = useMemo(() => {
+    const points: THREE.Vector3[] = []
+    for (let index = 0; index <= 70; index += 1) {
+      const progress = index / 70
+      const angle = progress * Math.PI * 18
+      points.push(
+        new THREE.Vector3(
+          Math.cos(angle) * 0.03,
+          Math.sin(angle) * 0.03,
+          0.78 + progress * 0.32,
+        ),
+      )
+    }
+    const geometry = new THREE.BufferGeometry().setFromPoints(points)
+    const material = new THREE.LineBasicMaterial({ color: '#d88f55' })
+    return new THREE.Line(geometry, material)
+  }, [])
 
   useFrame((_, delta) => {
     if (!needle.current) return
-    needle.current.position.z = THREE.MathUtils.damp(needle.current.position.z, 0.04, 11, delta)
+    elapsed.current += delta
+    const insertionTarget =
+      hit.result === 'BONE' && elapsed.current > 0.42
+        ? 0.34 + Math.sin(elapsed.current * 28) * 0.035
+        : 0.055
+    needle.current.position.z = THREE.MathUtils.damp(
+      needle.current.position.z,
+      insertionTarget,
+      hit.result === 'BONE' ? 13 : 9,
+      delta,
+    )
+    needle.current.rotation.x =
+      hit.result === 'NERVE' && elapsed.current > 0.3
+        ? Math.sin(elapsed.current * 58) * 0.025
+        : hit.result === 'BONE' && elapsed.current > 0.42
+          ? -0.12
+          : 0
   })
 
   return (
     <group position={hit.point} quaternion={hit.rotation}>
-      <group ref={needle} position={[0, 0, 1.4]}>
-        <mesh position={[0, 0, 0.74]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.014, 0.014, 1.45, 10]} />
+      <group ref={needle} position={[0, 0, 1.25]}>
+        <mesh position={[0, 0, 0.42]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.009, 0.014, 0.82, 12]} />
           <meshStandardMaterial color="#d9e4ec" metalness={0.85} roughness={0.2} />
         </mesh>
-        <mesh position={[0, 0, 1.53]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.045, 0.045, 0.28, 12]} />
-          <meshStandardMaterial color="#ff426f" roughness={0.45} />
+        <mesh position={[0, 0, -0.015]} rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.015, 0.12, 12]} />
+          <meshStandardMaterial color="#f4f8fa" metalness={0.92} roughness={0.12} />
+        </mesh>
+        <mesh position={[0, 0, 0.94]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.035, 0.035, 0.36, 16]} />
+          <meshStandardMaterial color="#8d4b32" roughness={0.36} metalness={0.42} />
+        </mesh>
+        <primitive object={coil} />
+        <mesh position={[0, 0, 1.16]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.043, 0.033, 0.06, 16]} />
+          <meshStandardMaterial color="#ff4d73" roughness={0.38} />
         </mesh>
       </group>
       <mesh>
@@ -325,17 +451,194 @@ function Needle({ hit }: { hit: Hit }) {
   )
 }
 
+function SuccessEffect() {
+  const group = useRef<THREE.Group>(null)
+  useFrame(({ clock }) => {
+    if (!group.current) return
+    const cycle = (clock.elapsedTime * 1.6) % 1
+    group.current.scale.setScalar(0.75 + cycle * 1.6)
+    group.current.rotation.z += 0.012
+  })
+  return (
+    <group ref={group}>
+      <mesh>
+        <ringGeometry args={[0.18, 0.225, 40]} />
+        <meshBasicMaterial color="#67edb0" transparent opacity={0.72} depthWrite={false} />
+      </mesh>
+      {Array.from({ length: 8 }, (_, index) => {
+        const angle = (index / 8) * Math.PI * 2
+        return (
+          <mesh key={index} position={[Math.cos(angle) * 0.32, Math.sin(angle) * 0.32, 0.045]}>
+            <sphereGeometry args={[0.022, 8, 8]} />
+            <meshBasicMaterial color="#c9ffe6" toneMapped={false} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+function BloodEffect() {
+  const group = useRef<THREE.Group>(null)
+  useFrame(({ clock }) => {
+    if (!group.current) return
+    const pulse = 0.9 + Math.sin(clock.elapsedTime * 9) * 0.08
+    group.current.scale.setScalar(pulse)
+    group.current.rotation.z += 0.006
+  })
+  return (
+    <group ref={group}>
+      {Array.from({ length: 12 }, (_, index) => {
+        const angle = (index / 12) * Math.PI * 2 + (index % 3) * 0.18
+        const radius = 0.12 + (index % 4) * 0.075
+        return (
+          <mesh
+            key={index}
+            position={[
+              Math.cos(angle) * radius,
+              Math.sin(angle) * radius,
+              0.06 + (index % 3) * 0.055,
+            ]}
+            scale={[0.7, 0.7, 1.5]}
+          >
+            <sphereGeometry args={[0.045 - (index % 3) * 0.008, 10, 10]} />
+            <meshPhysicalMaterial
+              color="#c90f38"
+              emissive="#6b0019"
+              emissiveIntensity={0.55}
+              roughness={0.2}
+              clearcoat={0.8}
+            />
+          </mesh>
+        )
+      })}
+      <pointLight color="#ff214d" intensity={3.5} distance={1.8} />
+    </group>
+  )
+}
+
+function NerveEffect() {
+  const lightning = useMemo(() => {
+    const positions: number[] = []
+    for (let branch = 0; branch < 5; branch += 1) {
+      const angle = (branch / 5) * Math.PI * 2
+      let previous = new THREE.Vector3(0, 0, 0.07)
+      for (let step = 1; step <= 6; step += 1) {
+        const radius = step * 0.11
+        const next = new THREE.Vector3(
+          Math.cos(angle) * radius + Math.sin(step * 3.1 + branch) * 0.035,
+          Math.sin(angle) * radius + Math.cos(step * 2.7 + branch) * 0.035,
+          0.075 + (step % 2) * 0.02,
+        )
+        positions.push(previous.x, previous.y, previous.z, next.x, next.y, next.z)
+        previous = next
+      }
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    const material = new THREE.LineBasicMaterial({
+      color: '#9fc2ff',
+      transparent: true,
+      opacity: 0.9,
+    })
+    return new THREE.LineSegments(geometry, material)
+  }, [])
+  const group = useRef<THREE.Group>(null)
+  useFrame(({ clock }) => {
+    if (!group.current) return
+    const flicker = 0.82 + Math.sin(clock.elapsedTime * 52) * 0.18
+    group.current.scale.setScalar(flicker)
+    group.current.rotation.z += 0.018
+  })
+  return (
+    <group ref={group}>
+      <primitive object={lightning} />
+      <pointLight color="#70a3ff" intensity={5.5} distance={2.2} />
+    </group>
+  )
+}
+
+function BruiseEffect() {
+  const bruise = useRef<THREE.Mesh>(null)
+  const material = useRef<THREE.MeshBasicMaterial>(null)
+  useFrame(({ clock }) => {
+    const cycle = Math.min((clock.elapsedTime % 4) / 1.2, 1)
+    bruise.current?.scale.setScalar(0.3 + cycle * 1.35)
+    if (material.current) material.current.opacity = 0.42 - cycle * 0.1
+  })
+  return (
+    <mesh ref={bruise} position={[0, 0, 0.035]}>
+      <circleGeometry args={[0.34, 48]} />
+      <meshBasicMaterial
+        ref={material}
+        color="#673a91"
+        transparent
+        opacity={0.4}
+        depthWrite={false}
+        blending={THREE.MultiplyBlending}
+      />
+    </mesh>
+  )
+}
+
+function BoneEffect() {
+  const group = useRef<THREE.Group>(null)
+  useFrame(({ clock }) => {
+    if (!group.current) return
+    const pulse = 0.65 + ((clock.elapsedTime * 2.8) % 1) * 1.8
+    group.current.scale.setScalar(pulse)
+    group.current.rotation.z -= 0.015
+  })
+  return (
+    <group ref={group}>
+      <mesh>
+        <ringGeometry args={[0.16, 0.205, 6]} />
+        <meshBasicMaterial color="#fff2cf" transparent opacity={0.82} depthWrite={false} />
+      </mesh>
+      {Array.from({ length: 6 }, (_, index) => {
+        const angle = (index / 6) * Math.PI * 2
+        return (
+          <mesh
+            key={index}
+            position={[Math.cos(angle) * 0.34, Math.sin(angle) * 0.34, 0.08]}
+            rotation={[0, 0, angle]}
+          >
+            <boxGeometry args={[0.1, 0.018, 0.018]} />
+            <meshBasicMaterial color="#fff7df" toneMapped={false} />
+          </mesh>
+        )
+      })}
+      <pointLight color="#ffe8b4" intensity={4} distance={1.6} />
+    </group>
+  )
+}
+
+function HitEffect({ hit }: { hit: Hit }) {
+  return (
+    <group position={hit.point} quaternion={hit.rotation}>
+      {hit.result === 'SUCCESS' && <SuccessEffect />}
+      {hit.result === 'BLOOD' && <BloodEffect />}
+      {hit.result === 'NERVE' && <NerveEffect />}
+      {hit.result === 'BRUISE' && <BruiseEffect />}
+      {hit.result === 'BONE' && <BoneEffect />}
+    </group>
+  )
+}
+
 function RealisticHand({
   onHit,
   disabled,
   target,
+  activeResult,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   disabled: boolean
   target: NeedleTarget
+  activeResult: NeedleResult | null
 }) {
   const { scene } = useGLTF('/models/hand.glb')
   const pointerStart = useRef<PointerStart | null>(null)
+  const handGroup = useRef<THREE.Group>(null)
   const { hand } = useMemo(() => {
     const preparedHand = scene.clone(true)
     const skinMaterial = new THREE.MeshPhysicalMaterial({
@@ -366,6 +669,20 @@ function RealisticHand({
 
     return { hand: preparedHand }
   }, [scene])
+
+  useFrame(({ clock }) => {
+    if (!handGroup.current) return
+    if (activeResult === 'NERVE') {
+      handGroup.current.rotation.x = -0.12 + Math.sin(clock.elapsedTime * 48) * 0.035
+      handGroup.current.rotation.z = -0.08 + Math.cos(clock.elapsedTime * 55) * 0.028
+    } else if (activeResult === 'BONE') {
+      handGroup.current.rotation.x = -0.12 + Math.sin(clock.elapsedTime * 22) * 0.012
+      handGroup.current.rotation.z = -0.08
+    } else {
+      handGroup.current.rotation.x = -0.12
+      handGroup.current.rotation.z = -0.08
+    }
+  })
 
   const rememberPointer = (event: ThreeEvent<PointerEvent>) => {
     pointerStart.current = {
@@ -415,13 +732,12 @@ function RealisticHand({
       sourcePoint.x - target.point.x,
       sourcePoint.y - target.point.y,
     )
-    const result: NeedleResult = !correctSurface
-      ? 'MISS'
-      : distance <= 0.9
-        ? 'SUCCESS'
-        : distance <= 2.2
-          ? 'NEAR'
-          : 'MISS'
+    const { result, eventZone } = classifyNeedleEvent({
+      distance,
+      dx: sourcePoint.x - target.point.x,
+      dy: sourcePoint.y - target.point.y,
+      correctSurface,
+    })
     const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
@@ -436,11 +752,13 @@ function RealisticHand({
       correctSurface,
       surfaceIssue,
       result,
+      eventZone,
     })
   }
 
   return (
     <group
+      ref={handGroup}
       rotation={[-0.12, 0.08, -0.08]}
       scale={0.135}
       onPointerDown={rememberPointer}
@@ -481,10 +799,20 @@ function Scene({
       <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
       <pointLight position={[3.2, -0.6, 2.6]} color="#ff7398" intensity={13} distance={7} />
       <Suspense fallback={null}>
-        <RealisticHand onHit={onHit} disabled={disabled} target={target} />
+        <RealisticHand
+          onHit={onHit}
+          disabled={disabled}
+          target={target}
+          activeResult={hit?.result ?? null}
+        />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
-      {hit && <Needle hit={hit} />}
+      {hit && (
+        <>
+          <Needle hit={hit} />
+          <HitEffect hit={hit} />
+        </>
+      )}
       <ContactShadows position={[0, -2.05, 0]} opacity={0.42} scale={7} blur={2.8} far={5} />
       <OrbitControls
         makeDefault
@@ -511,15 +839,29 @@ export default function App() {
   )
 
   const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
-    if (showFeedback || needleCount >= MAX_NEEDLES) return
+    if (hit || needleCount >= MAX_NEEDLES) return
     const nextCount = needleCount + 1
     setNeedleCount(nextCount)
     setHit({ ...nextHit, needleNumber: nextCount })
-    setShowFeedback(true)
+    setShowFeedback(false)
+    playNeedleSound(nextHit.result)
     if ('vibrate' in navigator) {
-      navigator.vibrate(nextHit.result === 'SUCCESS' ? 35 : [30, 45, 35])
+      const vibrationPatterns: Record<NeedleResult, number | number[]> = {
+        SUCCESS: 35,
+        BLOOD: [45, 35, 65],
+        NERVE: [20, 25, 20, 25, 65],
+        BRUISE: [55, 35, 35],
+        BONE: [90, 30, 45],
+      }
+      navigator.vibrate(vibrationPatterns[nextHit.result])
     }
   }
+
+  useEffect(() => {
+    if (!hit || showFeedback) return
+    const timer = window.setTimeout(() => setShowFeedback(true), 1350)
+    return () => window.clearTimeout(timer)
+  }, [hit, showFeedback])
 
   const continueGame = () => {
     if (needleCount >= MAX_NEEDLES) {
@@ -532,13 +874,15 @@ export default function App() {
 
   const feedback = hit ? RESULT_COPY[hit.result] : null
   const targetIndex = Math.min(
-    showFeedback ? Math.max(needleCount - 1, 0) : needleCount,
+    hit ? Math.max(needleCount - 1, 0) : needleCount,
     MAX_NEEDLES - 1,
   )
   const activeTarget = sessionTargets[targetIndex]
+  const activeEffect = hit?.result.toLowerCase() ?? ''
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${hit ? `result-${activeEffect}` : ''}`}>
+      {hit && <div className="screen-effect" aria-hidden="true" />}
       <header className="topbar">
         <div>
           <p className="eyebrow">NEEDLE ROULETTE · FIRST SESSION</p>
@@ -557,7 +901,7 @@ export default function App() {
           dpr={[1, 1.75]}
           gl={{ antialias: true, powerPreference: 'high-performance' }}
         >
-          <Scene onHit={handleHit} hit={hit} disabled={showFeedback} target={activeTarget} />
+          <Scene onHit={handleHit} hit={hit} disabled={Boolean(hit)} target={activeTarget} />
         </Canvas>
 
         <div className="scene-badge">
@@ -567,8 +911,18 @@ export default function App() {
 
         <div className="aim-tip">
           <i />
-          轻触绿色光圈下针
+          {hit ? '正在进针…' : '轻触绿色光圈下针'}
         </div>
+
+        {hit && !showFeedback && (
+          <div
+            className="insertion-status"
+            style={{ '--result-color': RESULT_COPY[hit.result].accent } as React.CSSProperties}
+          >
+            <span>{RESULT_COPY[hit.result].icon}</span>
+            针尖正在接触组织
+          </div>
+        )}
 
         <div className="gesture-guide" aria-hidden="true">
           <div><span className="gesture-icon">↔</span>拖动旋转</div>
@@ -607,6 +961,10 @@ export default function App() {
               <strong>{activeTarget.code} · {activeTarget.name}</strong>
               <span>{activeTarget.location}</span>
               <small>{activeTarget.traditionalUse}</small>
+            </div>
+            <div className="event-zone-row">
+              <span>触发区域</span>
+              <strong>{feedback.zone}</strong>
             </div>
             <div className="distance-row">
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>

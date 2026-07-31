@@ -167,6 +167,60 @@ h1 {
   box-shadow: 0 0 10px #67edb0;
 }
 
+.insertion-status {
+  --result-color: #67edb0;
+  position: absolute;
+  z-index: 4;
+  top: 58px;
+  left: 50%;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--result-color) 35%, transparent);
+  border-radius: 99px;
+  color: #f4f1ea;
+  background: rgba(8, 10, 18, 0.78);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--result-color) 18%, transparent);
+  backdrop-filter: blur(10px);
+  font-size: 10px;
+  transform: translateX(-50%);
+  animation: insertion-pop 220ms ease-out;
+}
+
+.insertion-status span {
+  color: var(--result-color);
+  font-size: 16px;
+}
+
+.screen-effect {
+  position: fixed;
+  z-index: 12;
+  inset: 0;
+  pointer-events: none;
+}
+
+.result-blood .screen-effect {
+  background: radial-gradient(circle, transparent 46%, rgba(151, 0, 35, 0.42));
+  animation: blood-pulse 480ms ease-out 2;
+}
+
+.result-nerve .screen-effect {
+  background:
+    linear-gradient(115deg, transparent 42%, rgba(126, 171, 255, 0.34) 48%, transparent 54%);
+  mix-blend-mode: screen;
+  animation: nerve-flash 130ms steps(2) 5;
+}
+
+.result-bruise .screen-effect {
+  background: radial-gradient(circle at 50% 48%, transparent 38%, rgba(91, 47, 132, 0.24));
+  animation: bruise-vignette 900ms ease-out;
+}
+
+.result-bone .scene-card {
+  animation: bone-jolt 260ms ease-out 2;
+}
+
 .gesture-guide {
   position: absolute;
   z-index: 2;
@@ -342,7 +396,8 @@ h1 {
   line-height: 1.5;
 }
 
-.distance-row {
+.distance-row,
+.event-zone-row {
   margin-bottom: 16px;
   padding: 12px 14px;
   display: flex;
@@ -353,6 +408,16 @@ h1 {
   color: #8e909f;
   background: rgba(255, 255, 255, 0.025);
   font-size: 11px;
+}
+
+.event-zone-row {
+  margin-bottom: 8px;
+  border-color: color-mix(in srgb, var(--result-color) 16%, transparent);
+}
+
+.event-zone-row strong {
+  color: var(--result-color);
+  font-size: 12px;
 }
 
 .distance-row strong {
@@ -388,6 +453,35 @@ h1 {
 
 @keyframes backdrop-in {
   from { opacity: 0; }
+}
+
+@keyframes insertion-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px) scale(0.94);
+  }
+}
+
+@keyframes blood-pulse {
+  0% { opacity: 0; }
+  35% { opacity: 1; }
+  100% { opacity: 0.28; }
+}
+
+@keyframes nerve-flash {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+@keyframes bruise-vignette {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bone-jolt {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px) rotate(-0.25deg); }
+  65% { transform: translateX(4px) rotate(0.25deg); }
 }
 
 @keyframes card-in {
