@@ -623,67 +623,147 @@ function SuccessEffect() {
   )
 }
 
+function BloodDroplet({ index }: { index: number }) {
+  const droplet = useRef<THREE.Mesh>(null)
+  const startedAt = useRef<number | null>(null)
+  const flight = useMemo(() => {
+    const angle = (index / 18) * Math.PI * 2 + (index % 4) * 0.19
+    return {
+      angle,
+      speed: 0.34 + (index % 5) * 0.055,
+      lift: 0.62 + (index % 4) * 0.11,
+      delay: (index % 3) * 0.025,
+      size: 0.024 + (index % 4) * 0.006,
+    }
+  }, [index])
+
+  useFrame(({ clock }) => {
+    if (!droplet.current) return
+    if (startedAt.current === null) startedAt.current = clock.elapsedTime
+    const elapsed = Math.max(clock.elapsedTime - startedAt.current - flight.delay, 0)
+    const active = elapsed <= 1.15
+    droplet.current.visible = active
+    if (!active) return
+
+    const distance = 0.035 + flight.speed * elapsed
+    droplet.current.position.set(
+      Math.cos(flight.angle) * distance,
+      Math.sin(flight.angle) * distance,
+      Math.max(0.025, 0.06 + flight.lift * elapsed - 0.72 * elapsed * elapsed),
+    )
+    const stretch = 1 + Math.min(elapsed * 1.8, 0.9)
+    droplet.current.scale.set(0.72, 0.72, stretch)
+  })
+
+  return (
+    <mesh ref={droplet}>
+      <sphereGeometry args={[flight.size, 10, 10]} />
+      <meshPhysicalMaterial
+        color={index % 4 === 0 ? '#ff3158' : '#a9062d'}
+        emissive="#5d001a"
+        emissiveIntensity={0.28}
+        roughness={0.22}
+        clearcoat={0.65}
+      />
+    </mesh>
+  )
+}
+
 function BloodEffect() {
-  const group = useRef<THREE.Group>(null)
+  const splash = useRef<THREE.Group>(null)
+  const ringMaterial = useRef<THREE.MeshBasicMaterial>(null)
   const startedAt = useRef<number | null>(null)
   useFrame(({ clock }) => {
-    if (!group.current) return
+    if (!splash.current) return
     if (startedAt.current === null) startedAt.current = clock.elapsedTime
     const elapsed = clock.elapsedTime - startedAt.current
-    const burst = THREE.MathUtils.clamp(elapsed / 0.75, 0, 1)
-    const pulse = 1 + Math.sin(elapsed * 16) * 0.1
-    group.current.scale.setScalar((0.25 + burst * 1.45) * pulse)
-    group.current.position.z = 0.04 + Math.sin(elapsed * 10) * 0.018
-    group.current.rotation.z += 0.014
+    const bloom = THREE.MathUtils.smoothstep(
+      THREE.MathUtils.clamp(elapsed / 0.72, 0, 1),
+      0,
+      1,
+    )
+    splash.current.scale.set(0.16 + bloom * 0.96, 0.12 + bloom * 0.82, 1)
+    splash.current.rotation.z = 0.18 + bloom * 0.1
+    if (ringMaterial.current) {
+      ringMaterial.current.opacity = Math.max(0, 0.7 - elapsed * 0.62)
+    }
   })
+
   return (
-    <group ref={group}>
-      {Array.from({ length: 34 }, (_, index) => {
-        const angle = (index / 34) * Math.PI * 2 + (index % 5) * 0.23
-        const radius = 0.1 + (index % 8) * 0.075
+    <group position={[0, 0, 0.045]}>
+      <group ref={splash}>
+        <mesh>
+          <circleGeometry args={[0.36, 48]} />
+          <meshBasicMaterial
+            color="#790522"
+            transparent
+            opacity={0.82}
+            depthWrite={false}
+            blending={THREE.MultiplyBlending}
+            premultipliedAlpha
+          />
+        </mesh>
+        {Array.from({ length: 9 }, (_, index) => {
+          const angle = (index / 9) * Math.PI * 2 + (index % 2) * 0.21
+          const distance = 0.31 + (index % 3) * 0.065
+          const radius = 0.065 + (index % 4) * 0.018
+          return (
+            <mesh
+              key={index}
+              position={[Math.cos(angle) * distance, Math.sin(angle) * distance, 0.006]}
+              scale={[1.45, 0.72, 1]}
+              rotation={[0, 0, angle]}
+            >
+              <circleGeometry args={[radius, 24]} />
+              <meshBasicMaterial
+                color={index % 3 === 0 ? '#bc0a35' : '#8f0529'}
+                transparent
+                opacity={0.76}
+                depthWrite={false}
+                blending={THREE.MultiplyBlending}
+                premultipliedAlpha
+              />
+            </mesh>
+          )
+        })}
+      </group>
+      <mesh position={[0, 0, 0.018]}>
+        <ringGeometry args={[0.34, 0.39, 48]} />
+        <meshBasicMaterial
+          ref={ringMaterial}
+          color="#ff4167"
+          transparent
+          opacity={0.7}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      {Array.from({ length: 18 }, (_, index) => (
+        <BloodDroplet key={index} index={index} />
+      ))}
+      {Array.from({ length: 6 }, (_, index) => {
+        const angle = (index / 6) * Math.PI * 2 + 0.25
         return (
           <mesh
-            key={index}
+            key={`ray-${index}`}
             position={[
-              Math.cos(angle) * radius,
-              Math.sin(angle) * radius,
-              0.06 + (index % 6) * 0.075,
+              Math.cos(angle) * 0.43,
+              Math.sin(angle) * 0.43,
+              0.012,
             ]}
-            scale={[0.68, 0.68, 1.7]}
+            rotation={[0, 0, angle]}
           >
-            <sphereGeometry args={[0.052 - (index % 4) * 0.007, 10, 10]} />
-            <meshPhysicalMaterial
-              color={index % 3 === 0 ? '#ff1647' : '#b90630'}
-              emissive="#7d001f"
-              emissiveIntensity={0.75}
-              roughness={0.16}
-              clearcoat={0.9}
+            <planeGeometry args={[0.24, 0.018]} />
+            <meshBasicMaterial
+              color="#d61643"
+              transparent
+              opacity={0.6}
+              depthWrite={false}
             />
           </mesh>
         )
       })}
-      {Array.from({ length: 4 }, (_, index) => {
-        const angle = (index / 4) * Math.PI * 2 + 0.4
-        return (
-          <group
-            key={`jet-${index}`}
-            rotation={[Math.sin(angle) * 0.32, Math.cos(angle) * 0.32, angle]}
-          >
-            <mesh position={[0, 0, 0.28]} rotation={[Math.PI / 2, 0, 0]}>
-              <coneGeometry args={[0.065, 0.58, 12]} />
-              <meshPhysicalMaterial
-                color="#d8083b"
-                emissive="#8b001f"
-                emissiveIntensity={0.8}
-                roughness={0.18}
-                transparent
-                opacity={0.9}
-              />
-            </mesh>
-          </group>
-        )
-      })}
-      <pointLight color="#ff1647" intensity={7.5} distance={2.8} />
+      <pointLight color="#ff365f" intensity={3.2} distance={1.8} />
     </group>
   )
 }
