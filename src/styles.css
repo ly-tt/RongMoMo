@@ -314,6 +314,34 @@ h1 {
   line-height: 1.65;
 }
 
+.knowledge-card {
+  margin: 0 0 14px;
+  padding: 13px 14px;
+  display: grid;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--result-color) 18%, transparent);
+  border-radius: 15px;
+  text-align: left;
+  background: color-mix(in srgb, var(--result-color) 5%, transparent);
+}
+
+.knowledge-card strong {
+  color: var(--result-color);
+  font-size: 13px;
+}
+
+.knowledge-card span {
+  color: #dedbe0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.knowledge-card small {
+  color: #898b99;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .distance-row {
   margin-bottom: 16px;
   padding: 12px 14px;
@@ -349,6 +377,13 @@ h1 {
 
 .feedback-card button:active {
   transform: scale(0.98);
+}
+
+.feedback-card .education-note {
+  margin: 11px 0 0;
+  color: #696b79;
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 @keyframes backdrop-in {
