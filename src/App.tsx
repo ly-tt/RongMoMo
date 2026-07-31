@@ -22,7 +22,10 @@ type PointerStart = {
 }
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
-const TARGET_POINT = new THREE.Vector3(-5.3, 11.5, 2.05)
+// The palm surface around this point sits at z≈4.3 in the source model.
+// Keep the marker slightly above it so depth testing hides it from the back
+// without burying it inside the hand.
+const TARGET_POINT = new THREE.Vector3(-5.3, 11.5, 4.5)
 const MAX_NEEDLES = 5
 
 const RESULT_COPY: Record<
