@@ -42,8 +42,44 @@ type PointerStart = {
   y: number
 }
 
+type PatientState = {
+  pain: number
+  bruise: number
+  bleeding: number
+  numb: number
+  trust: number
+  needleCount: number
+}
+
+type StateDelta = Omit<PatientState, 'needleCount'>
+
+type TreatmentSummary = {
+  satisfaction: number
+  rating: number
+  title: string
+  review: string
+  dialog: string
+}
+
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 const MAX_NEEDLES = 5
+const INITIAL_PATIENT_STATE: PatientState = {
+  pain: 8,
+  bruise: 0,
+  bleeding: 0,
+  numb: 0,
+  trust: 72,
+  needleCount: 0,
+}
+
+const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
+  SUCCESS: { pain: 2, bruise: 0, bleeding: 0, numb: 7, trust: 8 },
+  BLOOD: { pain: 9, bruise: 4, bleeding: 28, numb: 0, trust: -9 },
+  NERVE: { pain: 24, bruise: 0, bleeding: 0, numb: 34, trust: -18 },
+  BRUISE: { pain: 10, bruise: 26, bleeding: 2, numb: 0, trust: -8 },
+  BONE: { pain: 28, bruise: 5, bleeding: 0, numb: 3, trust: -22 },
+}
+
 const ACUPOINTS: NeedleTarget[] = [
   {
     code: 'LI4',
@@ -153,6 +189,85 @@ export function createTreatmentPlan(request: TreatmentPlanRequest = {}) {
   const palmTargets = shuffled(ACUPOINTS.filter((target) => target.surface === 'PALM')).slice(0, 3)
   const backTargets = shuffled(ACUPOINTS.filter((target) => target.surface === 'BACK')).slice(0, 2)
   return shuffled([...palmTargets, ...backTargets]).slice(0, count)
+}
+
+function clampState(value: number) {
+  return Math.round(THREE.MathUtils.clamp(value, 0, 100))
+}
+
+function applyNeedleResult(state: PatientState, result: NeedleResult): PatientState {
+  const delta = RESULT_IMPACT[result]
+  return {
+    pain: clampState(state.pain + delta.pain),
+    bruise: clampState(state.bruise + delta.bruise),
+    bleeding: clampState(state.bleeding + delta.bleeding),
+    numb: clampState(state.numb + delta.numb),
+    trust: clampState(state.trust + delta.trust),
+    needleCount: state.needleCount + 1,
+  }
+}
+
+// AI integration seam: Coze/Bailian can replace this text generator later.
+// The score and accumulated state remain deterministic game logic.
+export function createLocalTreatmentSummary(
+  patientState: PatientState,
+  hits: Hit[],
+): TreatmentSummary {
+  const resultCount = (result: NeedleResult) =>
+    hits.filter((hit) => hit.result === result).length
+  const successCount = resultCount('SUCCESS')
+  const nerveCount = resultCount('NERVE')
+  const bloodCount = resultCount('BLOOD')
+  const boneCount = resultCount('BONE')
+  const satisfaction = clampState(
+    patientState.trust * 0.55 +
+      (100 - patientState.pain) * 0.2 +
+      (100 - patientState.bruise) * 0.1 +
+      (100 - patientState.bleeding) * 0.08 +
+      (100 - patientState.numb) * 0.07,
+  )
+
+  if (satisfaction >= 85) {
+    return {
+      satisfaction,
+      rating: 5,
+      title: '稳准轻，患者很买账',
+      review: `${successCount} 针命中穴位，整段疗程节奏稳定，几乎没有让患者产生警惕。`,
+      dialog: '“原来针灸也可以这么轻松，下次还找你。”',
+    }
+  }
+  if (satisfaction >= 70) {
+    return {
+      satisfaction,
+      rating: 4,
+      title: '有惊无险，顺利收针',
+      review: bloodCount
+        ? `出现了 ${bloodCount} 次出血事件，但整体状态尚可，患者决定先观察你的后续表现。`
+        : '偶有偏差，好在反应及时，患者的信任还没有掉出安全线。',
+      dialog: '“还行，不过下一针能不能再轻一点？”',
+    }
+  }
+  if (satisfaction >= 50) {
+    return {
+      satisfaction,
+      rating: 3,
+      title: '疗程完成，气氛有点微妙',
+      review: nerveCount
+        ? `神经刺激出现 ${nerveCount} 次，麻木和疼痛累积明显，精准度仍需提升。`
+        : '偏针事件较多，患者全程盯着你的手，信任值勉强保住。',
+      dialog: '“我相信你……但我的手好像有自己的意见。”',
+    }
+  }
+  return {
+    satisfaction,
+    rating: Math.max(1, Math.round(satisfaction / 20)),
+    title: '针收了，患者也想走了',
+    review:
+      boneCount > 0
+        ? `硬组织刺激出现 ${boneCount} 次，疼痛和信任损失成为本次疗程的主要问题。`
+        : '多项状态已经进入高压区，这一局的首要任务不是追求得气，而是重新找准位置。',
+    dialog: '“下次见面……我们还是先握个手吧。”',
+  }
 }
 
 const RESULT_COPY: Record<
@@ -1109,11 +1224,127 @@ function Scene({
   )
 }
 
+function PatientStatus({ state }: { state: PatientState }) {
+  const items = [
+    { key: 'pain', label: '疼痛', value: state.pain, color: '#ff6d87' },
+    { key: 'bruise', label: '青紫', value: state.bruise, color: '#a878ff' },
+    { key: 'bleeding', label: '出血', value: state.bleeding, color: '#ff365f' },
+    { key: 'numb', label: '麻木', value: state.numb, color: '#77a7ff' },
+    { key: 'trust', label: '信任', value: state.trust, color: '#67edb0' },
+  ]
+
+  return (
+    <section className="patient-status" aria-label="患者当前疗程状态">
+      {items.map((item) => (
+        <div
+          key={item.key}
+          className="status-item"
+          style={{ '--status-color': item.color } as React.CSSProperties}
+        >
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          <i>
+            <b style={{ width: `${item.value}%` }} />
+          </i>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function TreatmentSummaryPage({
+  patientState,
+  hits,
+  targets,
+  onRestart,
+}: {
+  patientState: PatientState
+  hits: Hit[]
+  targets: NeedleTarget[]
+  onRestart: () => void
+}) {
+  const summary = useMemo(
+    () => createLocalTreatmentSummary(patientState, hits),
+    [patientState, hits],
+  )
+
+  return (
+    <main className="summary-shell">
+      <header className="summary-header">
+        <p className="eyebrow">NEEDLE ROULETTE · SESSION REPORT</p>
+        <span>疗程完成</span>
+        <h1>本次表现<br />有点东西</h1>
+        <p>{summary.title}</p>
+      </header>
+
+      <section className="score-card">
+        <div className="score-ring" style={{ '--score': summary.satisfaction } as React.CSSProperties}>
+          <strong>{summary.satisfaction}</strong>
+          <span>满意度</span>
+        </div>
+        <div className="score-copy">
+          <p>趣味评分</p>
+          <div className="rating-stars" aria-label={`${summary.rating} 星`}>
+            {Array.from({ length: 5 }, (_, index) => (
+              <span key={index} className={index < summary.rating ? 'active' : ''}>★</span>
+            ))}
+          </div>
+          <small>本地疗程引擎生成</small>
+        </div>
+      </section>
+
+      <PatientStatus state={patientState} />
+
+      <section className="ai-review">
+        <p>疗程评价</p>
+        <h2>{summary.review}</h2>
+        <blockquote>{summary.dialog}</blockquote>
+      </section>
+
+      <section className="needle-history">
+        <div className="section-heading">
+          <span>五针记录</span>
+          <small>{hits.filter((item) => item.result === 'SUCCESS').length} 次精准命中</small>
+        </div>
+        {hits.map((item, index) => {
+          const target = targets[index]
+          const copy = RESULT_COPY[item.result]
+          return (
+            <article key={item.needleNumber}>
+              <span
+                className="history-icon"
+                style={{ '--history-color': copy.accent } as React.CSSProperties}
+              >
+                {copy.icon}
+              </span>
+              <div>
+                <strong>第 {item.needleNumber} 针 · {target.code} {target.name}</strong>
+                <small>{copy.title} · {item.correctSurface ? `误差 ${item.distance.toFixed(1)}` : item.surfaceIssue}</small>
+              </div>
+            </article>
+          )
+        })}
+      </section>
+
+      <button className="restart-button" type="button" onClick={onRestart}>
+        再来一个疗程
+      </button>
+      <p className="summary-disclaimer">
+        当前对白由本地规则生成，扣子/百炼接口将在下一阶段接入。内容仅作游戏科普。
+      </p>
+    </main>
+  )
+}
+
 export default function App() {
   const [hit, setHit] = useState<Hit | null>(null)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
   const [needleCount, setNeedleCount] = useState(0)
+  const [patientState, setPatientState] = useState<PatientState>(() => ({
+    ...INITIAL_PATIENT_STATE,
+  }))
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showSummary, setShowSummary] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
   )
@@ -1125,6 +1356,7 @@ export default function App() {
     setNeedleCount(nextCount)
     setHit(recordedHit)
     setTreatmentHits((current) => [...current, recordedHit])
+    setPatientState((current) => applyNeedleResult(current, nextHit.result))
     setShowFeedback(false)
     playNeedleSound(nextHit.result)
     if ('vibrate' in navigator) {
@@ -1147,21 +1379,44 @@ export default function App() {
 
   const continueGame = () => {
     if (needleCount >= MAX_NEEDLES) {
-      setNeedleCount(0)
-      setSessionTargets(createTreatmentPlan())
-      setTreatmentHits([])
+      setHit(null)
+      setShowFeedback(false)
+      setShowSummary(true)
+      return
     }
     setHit(null)
     setShowFeedback(false)
   }
 
+  const restartTreatment = () => {
+    setHit(null)
+    setTreatmentHits([])
+    setNeedleCount(0)
+    setPatientState({ ...INITIAL_PATIENT_STATE })
+    setShowFeedback(false)
+    setShowSummary(false)
+    setSessionTargets(createTreatmentPlan())
+  }
+
   const feedback = hit ? RESULT_COPY[hit.result] : null
+  const activeDelta = hit ? RESULT_IMPACT[hit.result] : null
   const targetIndex = Math.min(
     hit ? Math.max(needleCount - 1, 0) : needleCount,
     MAX_NEEDLES - 1,
   )
   const activeTarget = sessionTargets[targetIndex]
   const activeEffect = hit?.result.toLowerCase() ?? ''
+
+  if (showSummary) {
+    return (
+      <TreatmentSummaryPage
+        patientState={patientState}
+        hits={treatmentHits}
+        targets={sessionTargets}
+        onRestart={restartTreatment}
+      />
+    )
+  }
 
   return (
     <main className={`app-shell ${hit ? `result-${activeEffect}` : ''}`}>
@@ -1176,6 +1431,8 @@ export default function App() {
           <span>/ 5</span>
         </div>
       </header>
+
+      <PatientStatus state={patientState} />
 
       <section className="scene-card" aria-label="寻找穴位并下针的三维手部模型">
         <Canvas
@@ -1266,9 +1523,30 @@ export default function App() {
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
               <strong>{hit.correctSurface ? hit.distance.toFixed(1) : hit.surfaceIssue}</strong>
             </div>
+            {activeDelta && (
+              <div className="state-delta" aria-label="本针状态变化">
+                {Object.entries(activeDelta)
+                  .filter(([, value]) => value !== 0)
+                  .map(([key, value]) => {
+                    const labels: Record<string, string> = {
+                      pain: '疼痛',
+                      bruise: '青紫',
+                      bleeding: '出血',
+                      numb: '麻木',
+                      trust: '信任',
+                    }
+                    const isHarm = key === 'trust' ? value < 0 : value > 0
+                    return (
+                      <span key={key} className={isHarm ? 'harm' : 'good'}>
+                        {labels[key]} {value > 0 ? '+' : ''}{value}
+                      </span>
+                    )
+                  })}
+              </div>
+            )}
             <p className="safety-note">{feedback.safety}</p>
             <button type="button" onClick={continueGame}>
-              {needleCount >= MAX_NEEDLES ? '再来一轮' : '继续下一针'}
+              {needleCount >= MAX_NEEDLES ? '查看疗程报告' : '继续下一针'}
             </button>
             <p className="education-note">穴位定位参考 WHO 标准，仅作游戏科普，不构成医疗建议。</p>
           </section>
