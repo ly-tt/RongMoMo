@@ -3,13 +3,50 @@ import { ContactShadows, Environment, OrbitControls, useGLTF } from '@react-thre
 import { Suspense, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
+type NeedleResult = 'SUCCESS' | 'NEAR' | 'MISS'
+
 type Hit = {
   point: THREE.Vector3
   label: string
   rotation: THREE.Quaternion
+  distance: number
+  result: NeedleResult
+  needleNumber: number
+}
+
+type PointerStart = {
+  pointerId: number
+  x: number
+  y: number
 }
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
+const TARGET_POINT = new THREE.Vector3(-5.3, 11.5, 2.05)
+const MAX_NEEDLES = 5
+
+const RESULT_COPY: Record<
+  NeedleResult,
+  { icon: string; title: string; message: string; accent: string }
+> = {
+  SUCCESS: {
+    icon: '◎',
+    title: '精准命中',
+    message: '酸麻感轻轻扩散，这一针很漂亮。',
+    accent: '#67edb0',
+  },
+  NEAR: {
+    icon: '◌',
+    title: '稍有偏差',
+    message: '离穴位只差一点，患者悄悄皱了下眉。',
+    accent: '#ffb454',
+  },
+  MISS: {
+    icon: '×',
+    title: '扎偏了',
+    message: '这不是目标穴位，再观察一下光圈位置。',
+    accent: '#ff567f',
+  },
+}
 
 function keepLeftHand(mesh: THREE.Mesh) {
   const source = mesh.geometry
@@ -24,13 +61,10 @@ function keepLeftHand(mesh: THREE.Mesh) {
     let worldX = 0
 
     for (let corner = 0; corner < 3; corner += 1) {
-      vertex
-        .fromBufferAttribute(position, index.getX(i + corner))
-        .applyMatrix4(mesh.matrixWorld)
+      vertex.fromBufferAttribute(position, index.getX(i + corner)).applyMatrix4(mesh.matrixWorld)
       worldX += vertex.x / 3
     }
 
-    // There is a clean empty band between the two source hands (x=1..3).
     if (worldX < 2) {
       keptIndices.push(index.getX(i), index.getX(i + 1), index.getX(i + 2))
     }
@@ -72,29 +106,89 @@ function classifyHandRegion(point: THREE.Vector3) {
   return `${finger.name} · 近节`
 }
 
-function HitMarker({ hit }: { hit: Hit }) {
-  const ring = useRef<THREE.Mesh>(null)
+function TargetMarker() {
+  const pulse = useRef<THREE.Group>(null)
 
   useFrame(({ clock }) => {
-    if (!ring.current) return
-    const pulse = 1 + Math.sin(clock.elapsedTime * 6) * 0.14
-    ring.current.scale.setScalar(pulse)
-    ring.current.rotation.z += 0.008
+    if (!pulse.current) return
+    const scale = 1 + Math.sin(clock.elapsedTime * 3.4) * 0.12
+    pulse.current.scale.setScalar(scale)
   })
 
   return (
-    <group position={hit.point} quaternion={hit.rotation}>
-      <mesh ref={ring}>
-        <torusGeometry args={[0.13, 0.022, 12, 32]} />
-        <meshBasicMaterial color="#ff4d7d" toneMapped={false} />
-      </mesh>
-      <pointLight color="#ff466f" intensity={1.8} distance={1.6} />
+    <group position={TARGET_POINT.clone().sub(PALM_PIVOT)}>
+      <group ref={pulse}>
+        <mesh>
+          <ringGeometry args={[0.48, 0.72, 48]} />
+          <meshBasicMaterial
+            color="#74f1bc"
+            transparent
+            opacity={0.8}
+            depthTest={false}
+            toneMapped={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+        <mesh>
+          <circleGeometry args={[0.18, 32]} />
+          <meshBasicMaterial
+            color="#d9ffef"
+            transparent
+            opacity={0.95}
+            depthTest={false}
+            toneMapped={false}
+          />
+        </mesh>
+      </group>
     </group>
   )
 }
 
-function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
+function Needle({ hit }: { hit: Hit }) {
+  const needle = useRef<THREE.Group>(null)
+
+  useFrame((_, delta) => {
+    if (!needle.current) return
+    needle.current.position.z = THREE.MathUtils.damp(needle.current.position.z, 0.04, 11, delta)
+  })
+
+  return (
+    <group position={hit.point} quaternion={hit.rotation}>
+      <group ref={needle} position={[0, 0, 0.9]}>
+        <mesh position={[0, 0, 0.42]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.012, 0.012, 0.82, 10]} />
+          <meshStandardMaterial color="#d9e4ec" metalness={0.85} roughness={0.2} />
+        </mesh>
+        <mesh position={[0, 0, 0.9]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.035, 0.035, 0.2, 12]} />
+          <meshStandardMaterial color="#ff426f" roughness={0.45} />
+        </mesh>
+      </group>
+      <mesh>
+        <ringGeometry args={[0.12, 0.155, 32]} />
+        <meshBasicMaterial
+          color={RESULT_COPY[hit.result].accent}
+          transparent
+          opacity={0.9}
+          depthTest={false}
+          toneMapped={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <pointLight color={RESULT_COPY[hit.result].accent} intensity={2.2} distance={1.8} />
+    </group>
+  )
+}
+
+function RealisticHand({
+  onHit,
+  disabled,
+}: {
+  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  disabled: boolean
+}) {
   const { scene } = useGLTF('/models/hand.glb')
+  const pointerStart = useRef<PointerStart | null>(null)
   const { hand } = useMemo(() => {
     const preparedHand = scene.clone(true)
     const skinMaterial = new THREE.MeshPhysicalMaterial({
@@ -112,7 +206,6 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
     preparedHand.updateMatrixWorld(true)
     preparedHand.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return
-
       keepLeftHand(object)
       object.visible = true
       object.castShadow = true
@@ -124,23 +217,45 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
     preparedHand.position.sub(PALM_PIVOT)
     preparedHand.updateMatrixWorld(true)
 
-    return {
-      hand: preparedHand,
-    }
+    return { hand: preparedHand }
   }, [scene])
+
+  const rememberPointer = (event: ThreeEvent<PointerEvent>) => {
+    pointerStart.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    }
+  }
 
   const registerHit = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation()
+    const start = pointerStart.current
+    pointerStart.current = null
+    if (
+      disabled ||
+      !start ||
+      start.pointerId !== event.pointerId ||
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) > 9
+    ) {
+      return
+    }
+
     const sourcePoint = hand.worldToLocal(event.point.clone())
     const side = sourcePoint.z >= PALM_PIVOT.z ? '手心' : '手背'
     const region = classifyHandRegion(sourcePoint)
+    const distance = Math.hypot(
+      sourcePoint.x - TARGET_POINT.x,
+      sourcePoint.y - TARGET_POINT.y,
+    )
+    const result: NeedleResult = distance <= 0.9 ? 'SUCCESS' : distance <= 2.2 ? 'NEAR' : 'MISS'
     const normal = event.face
       ? event.face.normal
           .clone()
           .applyMatrix3(new THREE.Matrix3().getNormalMatrix(event.object.matrixWorld))
           .normalize()
       : new THREE.Vector3(0, 0, 1)
-    const markerPoint = event.point.clone().addScaledVector(normal, 0.035)
+    const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
       normal,
@@ -150,6 +265,8 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
       point: markerPoint,
       label: `${side} · ${region}`,
       rotation: markerRotation,
+      distance,
+      result,
     })
   }
 
@@ -157,14 +274,27 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
     <group
       rotation={[-0.12, 0.08, -0.08]}
       scale={0.135}
-      onPointerDown={registerHit}
+      onPointerDown={rememberPointer}
+      onPointerUp={registerHit}
+      onPointerCancel={() => {
+        pointerStart.current = null
+      }}
     >
       <primitive object={hand} />
+      <TargetMarker />
     </group>
   )
 }
 
-function Scene({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
+function Scene({
+  onHit,
+  hit,
+  disabled,
+}: {
+  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  hit: Hit | null
+  disabled: boolean
+}) {
   return (
     <>
       <color attach="background" args={['#080a12']} />
@@ -180,10 +310,10 @@ function Scene({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
       <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
       <pointLight position={[3.2, -0.6, 2.6]} color="#ff7398" intensity={13} distance={7} />
       <Suspense fallback={null}>
-        <RealisticHand onHit={onHit} />
+        <RealisticHand onHit={onHit} disabled={disabled} />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
-      {hit && <HitMarker hit={hit} />}
+      {hit && <Needle hit={hit} />}
       <ContactShadows position={[0, -2.05, 0]} opacity={0.42} scale={7} blur={2.8} far={5} />
       <OrbitControls
         makeDefault
@@ -203,70 +333,106 @@ function Scene({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
 
 export default function App() {
   const [hit, setHit] = useState<Hit | null>(null)
-  const [hitCount, setHitCount] = useState(0)
+  const [needleCount, setNeedleCount] = useState(0)
+  const [showFeedback, setShowFeedback] = useState(false)
 
-  const handleHit = (nextHit: Hit) => {
-    setHit(nextHit)
-    setHitCount((count) => count + 1)
-    if ('vibrate' in navigator) navigator.vibrate(28)
+  const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
+    if (showFeedback || needleCount >= MAX_NEEDLES) return
+    const nextCount = needleCount + 1
+    setNeedleCount(nextCount)
+    setHit({ ...nextHit, needleNumber: nextCount })
+    setShowFeedback(true)
+    if ('vibrate' in navigator) {
+      navigator.vibrate(nextHit.result === 'SUCCESS' ? 35 : [30, 45, 35])
+    }
   }
+
+  const continueGame = () => {
+    if (needleCount >= MAX_NEEDLES) {
+      setNeedleCount(0)
+    }
+    setHit(null)
+    setShowFeedback(false)
+  }
+
+  const feedback = hit ? RESULT_COPY[hit.result] : null
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">NEEDLE ROULETTE · PROTOTYPE 01</p>
+          <p className="eyebrow">NEEDLE ROULETTE · FIRST SESSION</p>
           <h1>一针见血？</h1>
         </div>
-        <div className="stage-pill">
-          <span className="live-dot" />
-          3D 场景
+        <div className="needle-progress" aria-label={`第 ${Math.min(needleCount + 1, 5)} 针，共 5 针`}>
+          <strong>{needleCount >= MAX_NEEDLES ? '完成' : `第 ${needleCount + 1} 针`}</strong>
+          <span>/ 5</span>
         </div>
       </header>
 
-      <section className="scene-card" aria-label="可交互的三维手部模型">
+      <section className="scene-card" aria-label="寻找穴位并下针的三维手部模型">
         <Canvas
           shadows
           camera={{ position: [0, 0.25, 6.1], fov: 38 }}
           dpr={[1, 1.75]}
           gl={{ antialias: true, powerPreference: 'high-performance' }}
-          onPointerMissed={() => setHit(null)}
         >
-          <Scene onHit={handleHit} hit={hit} />
+          <Scene onHit={handleHit} hit={hit} disabled={showFeedback} />
         </Canvas>
 
         <div className="scene-badge">
-          <span>01</span>
-          单手游戏模型
+          <span>穴</span>
+          目标：掌心中央
+        </div>
+
+        <div className="aim-tip">
+          <i />
+          轻触绿色光圈下针
         </div>
 
         <div className="gesture-guide" aria-hidden="true">
-          <div>
-            <span className="gesture-icon">↻</span>
-            单指旋转
-          </div>
-          <div>
-            <span className="gesture-icon">⌁</span>
-            双指缩放
-          </div>
-          <div>
-            <span className="gesture-icon">＋</span>
-            点按测试
-          </div>
+          <div><span className="gesture-icon">↔</span>拖动旋转</div>
+          <div><span className="gesture-icon">↕</span>双指缩放</div>
+          <div><span className="gesture-icon">●</span>轻触下针</div>
         </div>
       </section>
 
       <footer className="control-panel">
         <div className="target-copy">
-          <p className="label">交互测试</p>
-          <h2>{hit ? `已命中 · ${hit.label}` : '触摸手部任意位置'}</h2>
-          <p>{hit ? '点击检测工作正常，红色光圈标记了触点。' : '转动模型，找一个你想“下针”的位置。'}</p>
+          <p className="label">本针任务</p>
+          <h2>找到掌心中央的绿色穴位</h2>
+          <p>{hit ? `落点：${hit.label}` : '旋转手部观察，轻触模型完成下针。'}</p>
         </div>
-        <div className="hit-counter" aria-label={`已测试 ${hitCount} 次`}>
-          <strong>{String(hitCount).padStart(2, '0')}</strong>
-          <span>触点</span>
+        <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
+          {Array.from({ length: MAX_NEEDLES }, (_, index) => (
+            <span key={index} className={index < needleCount ? 'done' : ''} />
+          ))}
         </div>
       </footer>
+
+      {showFeedback && feedback && hit && (
+        <div className="feedback-backdrop" role="presentation">
+          <section
+            className="feedback-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="feedback-title"
+            style={{ '--result-color': feedback.accent } as React.CSSProperties}
+          >
+            <div className="result-icon">{feedback.icon}</div>
+            <p className="feedback-kicker">第 {hit.needleNumber} / {MAX_NEEDLES} 针</p>
+            <h2 id="feedback-title">{feedback.title}</h2>
+            <p>{feedback.message}</p>
+            <div className="distance-row">
+              <span>落点误差</span>
+              <strong>{hit.distance.toFixed(1)}</strong>
+            </div>
+            <button type="button" onClick={continueGame}>
+              {needleCount >= MAX_NEEDLES ? '再来一轮' : '继续下一针'}
+            </button>
+          </section>
+        </div>
+      )}
     </main>
   )
 }
