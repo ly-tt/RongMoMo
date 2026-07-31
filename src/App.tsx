@@ -11,8 +11,15 @@ type Hit = {
   rotation: THREE.Quaternion
   distance: number
   correctSurface: boolean
+  surfaceIssue: string | null
   result: NeedleResult
   needleNumber: number
+}
+
+type NeedleTarget = {
+  name: string
+  hint: string
+  point: THREE.Vector3
 }
 
 type PointerStart = {
@@ -22,11 +29,34 @@ type PointerStart = {
 }
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
-// The palm surface around this point sits at z≈4.3 in the source model.
-// Keep the marker slightly above it so depth testing hides it from the back
-// without burying it inside the hand.
-const TARGET_POINT = new THREE.Vector3(-5.3, 11.5, 4.5)
 const MAX_NEEDLES = 5
+const TARGETS: NeedleTarget[] = [
+  {
+    name: '掌心中央',
+    hint: '第一针：找到掌心正中央',
+    point: new THREE.Vector3(-5.2, 10.5, 4.9),
+  },
+  {
+    name: '掌根中央',
+    hint: '第二针：向手腕方向寻找',
+    point: new THREE.Vector3(-6.2, 9, 5.1),
+  },
+  {
+    name: '拇指侧掌心',
+    hint: '第三针：观察拇指根部内侧',
+    point: new THREE.Vector3(-4.2, 10.5, 4.7),
+  },
+  {
+    name: '掌心上缘',
+    hint: '第四针：移动到指根下方',
+    point: new THREE.Vector3(-6.2, 12, 3.55),
+  },
+  {
+    name: '小指侧掌心',
+    hint: '第五针：寻找小指一侧的掌面',
+    point: new THREE.Vector3(-7.2, 10.5, 4.5),
+  },
+]
 
 const RESULT_COPY: Record<
   NeedleResult,
@@ -110,7 +140,7 @@ function classifyHandRegion(point: THREE.Vector3) {
   return `${finger.name} · 近节`
 }
 
-function TargetMarker() {
+function TargetMarker({ target }: { target: NeedleTarget }) {
   const pulse = useRef<THREE.Group>(null)
 
   useFrame(({ clock }) => {
@@ -120,7 +150,7 @@ function TargetMarker() {
   })
 
   return (
-    <group position={TARGET_POINT.clone().sub(PALM_PIVOT)}>
+    <group position={target.point.clone().sub(PALM_PIVOT)}>
       <group ref={pulse}>
         <mesh>
           <ringGeometry args={[0.48, 0.72, 48]} />
@@ -158,13 +188,13 @@ function Needle({ hit }: { hit: Hit }) {
 
   return (
     <group position={hit.point} quaternion={hit.rotation}>
-      <group ref={needle} position={[0, 0, 0.9]}>
-        <mesh position={[0, 0, 0.42]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.012, 0.012, 0.82, 10]} />
+      <group ref={needle} position={[0, 0, 1.4]}>
+        <mesh position={[0, 0, 0.74]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.014, 0.014, 1.45, 10]} />
           <meshStandardMaterial color="#d9e4ec" metalness={0.85} roughness={0.2} />
         </mesh>
-        <mesh position={[0, 0, 0.9]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.035, 0.035, 0.2, 12]} />
+        <mesh position={[0, 0, 1.53]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.045, 0.045, 0.28, 12]} />
           <meshStandardMaterial color="#ff426f" roughness={0.45} />
         </mesh>
       </group>
@@ -187,9 +217,11 @@ function Needle({ hit }: { hit: Hit }) {
 function RealisticHand({
   onHit,
   disabled,
+  target,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   disabled: boolean
+  target: NeedleTarget
 }) {
   const { scene } = useGLTF('/models/hand.glb')
   const pointerStart = useRef<PointerStart | null>(null)
@@ -246,12 +278,26 @@ function RealisticHand({
     }
 
     const sourcePoint = hand.worldToLocal(event.point.clone())
-    const correctSurface = sourcePoint.z >= PALM_PIVOT.z
-    const side = correctSurface ? '手心' : '手背'
+    const side = sourcePoint.z >= PALM_PIVOT.z ? '手心' : '手背'
     const region = classifyHandRegion(sourcePoint)
+    const normal = event.face
+      ? event.face.normal
+          .clone()
+          .applyMatrix3(new THREE.Matrix3().getNormalMatrix(event.object.matrixWorld))
+          .normalize()
+      : new THREE.Vector3(0, 0, 1)
+    const palmNormal = new THREE.Vector3(0, 0, 1).transformDirection(hand.matrixWorld)
+    const surfaceAlignment = normal.dot(palmNormal)
+    const surfaceIssue =
+      sourcePoint.z < PALM_PIVOT.z
+        ? '手背（错误）'
+        : surfaceAlignment < 0.65
+          ? '手掌侧面（侧扎）'
+          : null
+    const correctSurface = surfaceIssue === null
     const distance = Math.hypot(
-      sourcePoint.x - TARGET_POINT.x,
-      sourcePoint.y - TARGET_POINT.y,
+      sourcePoint.x - target.point.x,
+      sourcePoint.y - target.point.y,
     )
     const result: NeedleResult = !correctSurface
       ? 'MISS'
@@ -260,12 +306,6 @@ function RealisticHand({
         : distance <= 2.2
           ? 'NEAR'
           : 'MISS'
-    const normal = event.face
-      ? event.face.normal
-          .clone()
-          .applyMatrix3(new THREE.Matrix3().getNormalMatrix(event.object.matrixWorld))
-          .normalize()
-      : new THREE.Vector3(0, 0, 1)
     const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
@@ -278,6 +318,7 @@ function RealisticHand({
       rotation: markerRotation,
       distance,
       correctSurface,
+      surfaceIssue,
       result,
     })
   }
@@ -293,7 +334,7 @@ function RealisticHand({
       }}
     >
       <primitive object={hand} />
-      <TargetMarker />
+      <TargetMarker target={target} />
     </group>
   )
 }
@@ -302,10 +343,12 @@ function Scene({
   onHit,
   hit,
   disabled,
+  target,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   hit: Hit | null
   disabled: boolean
+  target: NeedleTarget
 }) {
   return (
     <>
@@ -322,7 +365,7 @@ function Scene({
       <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
       <pointLight position={[3.2, -0.6, 2.6]} color="#ff7398" intensity={13} distance={7} />
       <Suspense fallback={null}>
-        <RealisticHand onHit={onHit} disabled={disabled} />
+        <RealisticHand onHit={onHit} disabled={disabled} target={target} />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
       {hit && <Needle hit={hit} />}
@@ -368,6 +411,11 @@ export default function App() {
   }
 
   const feedback = hit ? RESULT_COPY[hit.result] : null
+  const targetIndex = Math.min(
+    showFeedback ? Math.max(needleCount - 1, 0) : needleCount,
+    MAX_NEEDLES - 1,
+  )
+  const activeTarget = TARGETS[targetIndex]
 
   return (
     <main className="app-shell">
@@ -389,12 +437,12 @@ export default function App() {
           dpr={[1, 1.75]}
           gl={{ antialias: true, powerPreference: 'high-performance' }}
         >
-          <Scene onHit={handleHit} hit={hit} disabled={showFeedback} />
+          <Scene onHit={handleHit} hit={hit} disabled={showFeedback} target={activeTarget} />
         </Canvas>
 
         <div className="scene-badge">
           <span>穴</span>
-          目标：掌心中央
+          目标：{activeTarget.name}
         </div>
 
         <div className="aim-tip">
@@ -412,8 +460,8 @@ export default function App() {
       <footer className="control-panel">
         <div className="target-copy">
           <p className="label">本针任务</p>
-          <h2>找到掌心中央的绿色穴位</h2>
-          <p>{hit ? `落点：${hit.label}` : '旋转手部观察，轻触模型完成下针。'}</p>
+          <h2>{activeTarget.hint}</h2>
+          <p>{hit ? `落点：${hit.label}` : '五针位置各不相同，旋转观察后轻触下针。'}</p>
         </div>
         <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
           {Array.from({ length: MAX_NEEDLES }, (_, index) => (
@@ -437,7 +485,7 @@ export default function App() {
             <p>{feedback.message}</p>
             <div className="distance-row">
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
-              <strong>{hit.correctSurface ? hit.distance.toFixed(1) : '手背（错误）'}</strong>
+              <strong>{hit.correctSurface ? hit.distance.toFixed(1) : hit.surfaceIssue}</strong>
             </div>
             <button type="button" onClick={continueGame}>
               {needleCount >= MAX_NEEDLES ? '再来一轮' : '继续下一针'}
