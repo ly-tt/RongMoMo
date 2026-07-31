@@ -8,6 +8,45 @@ type Hit = {
   label: string
 }
 
+const handPalette: Record<string, string> = {
+  Object_2: '#f8c5ad',
+  Object_3: '#efad96',
+  Object_4: '#f4b79f',
+  Object_5: '#e9a189',
+}
+
+function keepLeftHand(mesh: THREE.Mesh) {
+  const source = mesh.geometry
+  const index = source.index
+  const position = source.attributes.position
+  if (!index || !position) return
+
+  const keptIndices: number[] = []
+  const vertex = new THREE.Vector3()
+
+  for (let i = 0; i < index.count; i += 3) {
+    let worldX = 0
+
+    for (let corner = 0; corner < 3; corner += 1) {
+      vertex
+        .fromBufferAttribute(position, index.getX(i + corner))
+        .applyMatrix4(mesh.matrixWorld)
+      worldX += vertex.x / 3
+    }
+
+    // There is a clean empty band between the two source hands (x=1..3).
+    if (worldX < 2) {
+      keptIndices.push(index.getX(i), index.getX(i + 1), index.getX(i + 2))
+    }
+  }
+
+  const cropped = source.clone()
+  cropped.setIndex(keptIndices)
+  cropped.computeBoundingBox()
+  cropped.computeBoundingSphere()
+  mesh.geometry = cropped
+}
+
 function HitMarker({ hit }: { hit: Hit }) {
   const ring = useRef<THREE.Mesh>(null)
 
@@ -34,26 +73,25 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
   const hand = useMemo(() => scene.clone(true), [scene])
 
   useEffect(() => {
+    hand.updateMatrixWorld(true)
+
     hand.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return
 
-      // The source scene contains four overlapping topology-study stages.
-      // Keep only the finished hand mesh instead of rendering the study layers.
-      object.visible = object.name === 'Object_5'
-      if (!object.visible) return
-
+      keepLeftHand(object)
+      object.visible = true
       object.castShadow = true
       object.receiveShadow = true
       object.material = new THREE.MeshPhysicalMaterial({
-        color: '#f2aa8f',
-        roughness: 0.7,
+        color: handPalette[object.name] ?? '#efab92',
+        roughness: 0.72,
         metalness: 0,
-        clearcoat: 0.16,
-        clearcoatRoughness: 0.72,
-        sheen: 0.32,
+        clearcoat: 0.12,
+        clearcoatRoughness: 0.76,
+        sheen: 0.26,
         sheenColor: new THREE.Color('#ffb0a5'),
         emissive: new THREE.Color('#421418'),
-        emissiveIntensity: 0.025,
+        emissiveIntensity: 0.02,
       })
       object.material.needsUpdate = true
     })
@@ -145,7 +183,7 @@ export default function App() {
 
         <div className="scene-badge">
           <span>01</span>
-          暖色游戏手
+          单手游戏模型
         </div>
 
         <div className="gesture-guide" aria-hidden="true">
