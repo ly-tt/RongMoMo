@@ -6,7 +6,10 @@ import * as THREE from 'three'
 type Hit = {
   point: THREE.Vector3
   label: string
+  rotation: THREE.Quaternion
 }
+
+const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 
 function keepLeftHand(mesh: THREE.Mesh) {
   const source = mesh.geometry
@@ -44,22 +47,22 @@ function classifyHandRegion(point: THREE.Vector3) {
   const { x, y } = point
 
   if (y < 6.5) return '手腕'
-  if (x < -8.3 && y < 16.5) {
+  if (x > -2.2 && y < 16.5) {
     if (y > 13.2) return '拇指 · 指尖'
     if (y > 10) return '拇指 · 指节'
     return '拇指根部'
   }
   if (y < 15) {
-    if (x < -7.2) return '掌部 · 拇指侧'
+    if (x < -7.2) return '掌部 · 小指侧'
     if (x < -3.4) return '掌部 · 中央'
-    return '掌部 · 小指侧'
+    return '掌部 · 拇指侧'
   }
 
   const fingers = [
-    { maxX: -7, name: '食指', tipY: 23.2 },
-    { maxX: -4.4, name: '中指', tipY: 24.7 },
-    { maxX: -2, name: '无名指', tipY: 23.4 },
-    { maxX: Number.POSITIVE_INFINITY, name: '小指', tipY: 21.2 },
+    { maxX: -7, name: '小指', tipY: 21.2 },
+    { maxX: -4.4, name: '无名指', tipY: 23.4 },
+    { maxX: -2, name: '中指', tipY: 24.7 },
+    { maxX: Number.POSITIVE_INFINITY, name: '食指', tipY: 23.2 },
   ]
   const finger = fingers.find((candidate) => x < candidate.maxX) ?? fingers[3]
   const progress = THREE.MathUtils.clamp((y - 14.5) / (finger.tipY - 14.5), 0, 1)
@@ -80,7 +83,7 @@ function HitMarker({ hit }: { hit: Hit }) {
   })
 
   return (
-    <group position={hit.point}>
+    <group position={hit.point} quaternion={hit.rotation}>
       <mesh ref={ring}>
         <torusGeometry args={[0.13, 0.022, 12, 32]} />
         <meshBasicMaterial color="#ff4d7d" toneMapped={false} />
@@ -92,7 +95,7 @@ function HitMarker({ hit }: { hit: Hit }) {
 
 function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
   const { scene } = useGLTF('/models/hand.glb')
-  const { hand, sourceCenter } = useMemo(() => {
+  const { hand } = useMemo(() => {
     const preparedHand = scene.clone(true)
     const skinMaterial = new THREE.MeshPhysicalMaterial({
       color: '#f2aa8f',
@@ -118,23 +121,36 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
     })
 
     preparedHand.updateMatrixWorld(true)
-    const bounds = new THREE.Box3().setFromObject(preparedHand)
-    const sourceCenter = bounds.getCenter(new THREE.Vector3())
-    preparedHand.position.sub(sourceCenter)
+    preparedHand.position.sub(PALM_PIVOT)
     preparedHand.updateMatrixWorld(true)
 
     return {
       hand: preparedHand,
-      sourceCenter,
     }
   }, [scene])
 
   const registerHit = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation()
     const sourcePoint = hand.worldToLocal(event.point.clone())
-    const side = sourcePoint.z >= sourceCenter.z ? '手心' : '手背'
+    const side = sourcePoint.z >= PALM_PIVOT.z ? '手背' : '手心'
     const region = classifyHandRegion(sourcePoint)
-    onHit({ point: event.point.clone(), label: `${side} · ${region}` })
+    const normal = event.face
+      ? event.face.normal
+          .clone()
+          .applyMatrix3(new THREE.Matrix3().getNormalMatrix(event.object.matrixWorld))
+          .normalize()
+      : new THREE.Vector3(0, 0, 1)
+    const markerPoint = event.point.clone().addScaledVector(normal, 0.035)
+    const markerRotation = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1),
+      normal,
+    )
+
+    onHit({
+      point: markerPoint,
+      label: `${side} · ${region}`,
+      rotation: markerRotation,
+    })
   }
 
   return (
