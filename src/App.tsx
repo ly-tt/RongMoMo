@@ -1,18 +1,11 @@
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
-import { Center, ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
+import { Suspense, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
 type Hit = {
   point: THREE.Vector3
   label: string
-}
-
-const handPalette: Record<string, string> = {
-  Object_2: '#f8c5ad',
-  Object_3: '#efad96',
-  Object_4: '#f4b79f',
-  Object_5: '#e9a189',
 }
 
 function keepLeftHand(mesh: THREE.Mesh) {
@@ -47,6 +40,37 @@ function keepLeftHand(mesh: THREE.Mesh) {
   mesh.geometry = cropped
 }
 
+function classifyHandRegion(point: THREE.Vector3) {
+  const { x, y } = point
+
+  if (y < 6.5) return '手腕'
+
+  if (x < -8.3 && y < 16.5) {
+    if (y > 13.2) return '拇指 · 指尖'
+    if (y > 10) return '拇指 · 指节'
+    return '拇指根部'
+  }
+
+  if (y < 15) {
+    if (x < -7.2) return '掌部 · 拇指侧'
+    if (x < -3.4) return '掌心中央'
+    return '掌部 · 小指侧'
+  }
+
+  const fingers = [
+    { maxX: -7, name: '食指', tipY: 23.2 },
+    { maxX: -4.4, name: '中指', tipY: 24.7 },
+    { maxX: -2, name: '无名指', tipY: 23.4 },
+    { maxX: Number.POSITIVE_INFINITY, name: '小指', tipY: 21.2 },
+  ]
+  const finger = fingers.find((candidate) => x < candidate.maxX) ?? fingers[3]
+  const progress = THREE.MathUtils.clamp((y - 14.5) / (finger.tipY - 14.5), 0, 1)
+
+  if (progress > 0.72) return `${finger.name} · 指尖`
+  if (progress > 0.38) return `${finger.name} · 中节`
+  return `${finger.name} · 近节`
+}
+
 function HitMarker({ hit }: { hit: Hit }) {
   const ring = useRef<THREE.Mesh>(null)
 
@@ -70,43 +94,49 @@ function HitMarker({ hit }: { hit: Hit }) {
 
 function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
   const { scene } = useGLTF('/models/hand.glb')
-  const hand = useMemo(() => scene.clone(true), [scene])
+  const { hand, center } = useMemo(() => {
+    const preparedHand = scene.clone(true)
+    const skinMaterial = new THREE.MeshPhysicalMaterial({
+      color: '#f2aa8f',
+      roughness: 0.72,
+      metalness: 0,
+      clearcoat: 0.12,
+      clearcoatRoughness: 0.76,
+      sheen: 0.26,
+      sheenColor: new THREE.Color('#ffb0a5'),
+      emissive: new THREE.Color('#421418'),
+      emissiveIntensity: 0.02,
+    })
 
-  useEffect(() => {
-    hand.updateMatrixWorld(true)
-
-    hand.traverse((object) => {
+    preparedHand.updateMatrixWorld(true)
+    preparedHand.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return
 
       keepLeftHand(object)
       object.visible = true
       object.castShadow = true
       object.receiveShadow = true
-      object.material = new THREE.MeshPhysicalMaterial({
-        color: handPalette[object.name] ?? '#efab92',
-        roughness: 0.72,
-        metalness: 0,
-        clearcoat: 0.12,
-        clearcoatRoughness: 0.76,
-        sheen: 0.26,
-        sheenColor: new THREE.Color('#ffb0a5'),
-        emissive: new THREE.Color('#421418'),
-        emissiveIntensity: 0.02,
-      })
-      object.material.needsUpdate = true
+      object.material = skinMaterial
     })
-  }, [hand])
+
+    preparedHand.updateMatrixWorld(true)
+    const bounds = new THREE.Box3().setFromObject(preparedHand)
+
+    return {
+      hand: preparedHand,
+      center: bounds.getCenter(new THREE.Vector3()),
+    }
+  }, [scene])
 
   const registerHit = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation()
-    onHit({ point: event.point.clone(), label: '手部' })
+    const localPoint = event.object.worldToLocal(event.point.clone())
+    onHit({ point: event.point.clone(), label: classifyHandRegion(localPoint) })
   }
 
   return (
     <group rotation={[-0.12, 0.08, -0.08]} scale={0.135} onClick={registerHit}>
-      <Center>
-        <primitive object={hand} />
-      </Center>
+      <primitive object={hand} position={[-center.x, -center.y, -center.z]} />
     </group>
   )
 }
