@@ -132,7 +132,7 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
   const registerHit = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation()
     const sourcePoint = hand.worldToLocal(event.point.clone())
-    const side = sourcePoint.z >= PALM_PIVOT.z ? '手背' : '手心'
+    const side = sourcePoint.z >= PALM_PIVOT.z ? '手心' : '手背'
     const region = classifyHandRegion(sourcePoint)
     const normal = event.face
       ? event.face.normal
