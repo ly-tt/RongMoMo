@@ -1,4 +1,4 @@
-import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
 import { Suspense, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -40,35 +40,80 @@ function keepLeftHand(mesh: THREE.Mesh) {
   mesh.geometry = cropped
 }
 
-function classifyHandRegion(point: THREE.Vector3) {
-  const { x, y } = point
+type HitRegion = {
+  label: string
+  position: [number, number, number]
+  size: [number, number, number]
+  rotation?: [number, number, number]
+}
 
-  if (y < 6.5) return '手腕'
+const hitRegions: HitRegion[] = [
+  { label: '手腕', position: [-5.8, 3.2, 1.3], size: [6.8, 6.4, 7.8] },
+  { label: '掌部 · 拇指侧', position: [-8.2, 10.5, 1.3], size: [3.1, 7.8, 7.8] },
+  { label: '掌心中央', position: [-5.2, 10.5, 1.3], size: [3.1, 7.8, 7.8] },
+  { label: '掌部 · 小指侧', position: [-2.2, 10.5, 1.3], size: [3.1, 7.8, 7.8] },
+  {
+    label: '拇指根部',
+    position: [-9.7, 10.4, 1.3],
+    size: [3.5, 3.1, 7.8],
+    rotation: [0, 0, -0.72],
+  },
+  {
+    label: '拇指 · 指节',
+    position: [-11.1, 12.5, 1.3],
+    size: [3.2, 2.8, 7.8],
+    rotation: [0, 0, -0.72],
+  },
+  {
+    label: '拇指 · 指尖',
+    position: [-11.1, 14.8, 1.3],
+    size: [3, 2.8, 7.8],
+    rotation: [0, 0, -0.72],
+  },
+  { label: '食指 · 近节', position: [-8.5, 16.2, 1.3], size: [2.7, 3.1, 7.8] },
+  { label: '食指 · 中节', position: [-8.5, 19.3, 1.3], size: [2.7, 3.1, 7.8] },
+  { label: '食指 · 指尖', position: [-8.5, 22.2, 1.3], size: [2.7, 2.8, 7.8] },
+  { label: '中指 · 近节', position: [-5.7, 16.4, 1.3], size: [2.7, 3.3, 7.8] },
+  { label: '中指 · 中节', position: [-5.7, 20, 1.3], size: [2.7, 3.7, 7.8] },
+  { label: '中指 · 指尖', position: [-5.7, 23.3, 1.3], size: [2.7, 3, 7.8] },
+  { label: '无名指 · 近节', position: [-3.2, 16.3, 1.3], size: [2.5, 3.2, 7.8] },
+  { label: '无名指 · 中节', position: [-3.2, 19.5, 1.3], size: [2.5, 3.2, 7.8] },
+  { label: '无名指 · 指尖', position: [-3.2, 22.3, 1.3], size: [2.5, 2.7, 7.8] },
+  { label: '小指 · 近节', position: [-0.9, 15.8, 1.3], size: [2.4, 2.8, 7.8] },
+  { label: '小指 · 中节', position: [-0.9, 18.4, 1.3], size: [2.4, 2.6, 7.8] },
+  { label: '小指 · 指尖', position: [-0.9, 20.6, 1.3], size: [2.4, 2.3, 7.8] },
+]
 
-  if (x < -8.3 && y < 16.5) {
-    if (y > 13.2) return '拇指 · 指尖'
-    if (y > 10) return '拇指 · 指节'
-    return '拇指根部'
-  }
-
-  if (y < 15) {
-    if (x < -7.2) return '掌部 · 拇指侧'
-    if (x < -3.4) return '掌心中央'
-    return '掌部 · 小指侧'
-  }
-
-  const fingers = [
-    { maxX: -7, name: '食指', tipY: 23.2 },
-    { maxX: -4.4, name: '中指', tipY: 24.7 },
-    { maxX: -2, name: '无名指', tipY: 23.4 },
-    { maxX: Number.POSITIVE_INFINITY, name: '小指', tipY: 21.2 },
-  ]
-  const finger = fingers.find((candidate) => x < candidate.maxX) ?? fingers[3]
-  const progress = THREE.MathUtils.clamp((y - 14.5) / (finger.tipY - 14.5), 0, 1)
-
-  if (progress > 0.72) return `${finger.name} · 指尖`
-  if (progress > 0.38) return `${finger.name} · 中节`
-  return `${finger.name} · 近节`
+function HandHitRegions({
+  center,
+  onHit,
+}: {
+  center: THREE.Vector3
+  onHit: (hit: Hit) => void
+}) {
+  return (
+    <group position={[-center.x, -center.y, -center.z]}>
+      {hitRegions.map((region) => (
+        <mesh
+          key={region.label}
+          position={region.position}
+          rotation={region.rotation}
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            onHit({ point: event.point.clone(), label: region.label })
+          }}
+        >
+          <boxGeometry args={region.size} />
+          <meshBasicMaterial
+            transparent
+            opacity={0}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
+    </group>
+  )
 }
 
 function HitMarker({ hit }: { hit: Hit }) {
@@ -128,15 +173,10 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
     }
   }, [scene])
 
-  const registerHit = (event: ThreeEvent<MouseEvent>) => {
-    event.stopPropagation()
-    const localPoint = event.object.worldToLocal(event.point.clone())
-    onHit({ point: event.point.clone(), label: classifyHandRegion(localPoint) })
-  }
-
   return (
-    <group rotation={[-0.12, 0.08, -0.08]} scale={0.135} onClick={registerHit}>
+    <group rotation={[-0.12, 0.08, -0.08]} scale={0.135}>
       <primitive object={hand} position={[-center.x, -center.y, -center.z]} />
+      <HandHitRegions center={center} onHit={onHit} />
     </group>
   )
 }
