@@ -8,6 +8,8 @@ type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD
 
 type Hit = {
   point: THREE.Vector3
+  localPoint: THREE.Vector3
+  localNormal: THREE.Vector3
   label: string
   rotation: THREE.Quaternion
   distance: number
@@ -155,42 +157,54 @@ export function createTreatmentPlan(request: TreatmentPlanRequest = {}) {
 
 const RESULT_COPY: Record<
   NeedleResult,
-  { icon: string; title: string; message: string; accent: string; zone: string }
+  {
+    icon: string
+    title: string
+    message: string
+    accent: string
+    zone: string
+    safety: string
+  }
 > = {
   SUCCESS: {
     icon: '◎',
     title: '精准命中',
-    message: '酸麻感轻轻扩散，这一针很漂亮。',
+    message: '局部出现酸、胀、沉、重或麻的“得气感”。',
     accent: '#67edb0',
     zone: '目标穴位',
+    safety: '得气感可以出现，但并不等同于针尖触碰神经。',
   },
   BLOOD: {
     icon: '●',
     title: '扎到血管',
-    message: '红色液滴突然冒出，患者倒吸了一口凉气。',
+    message: '血液迅速涌出，画面进入夸张的“一针见血”时刻。',
     accent: '#ff365f',
     zone: '浅表血管区',
+    safety: '现实中的少量出血或瘀青可以发生；若出血不止，应持续加压并寻求医疗帮助。',
   },
   NERVE: {
     icon: 'ϟ',
     title: '神经刺激',
-    message: '一阵麻麻的电流穿过手掌，手指都抖了一下。',
+    message: '瞬间电击感向手指放射，和普通得气感明显不同。',
     accent: '#77a7ff',
     zone: '神经敏感区',
+    safety: '现实中若持续麻木、电击痛、感觉减退或无力，应及时寻求医疗帮助。',
   },
   BRUISE: {
     icon: '◌',
     title: '出现青紫',
-    message: '落点附近慢慢泛紫，这一针偏得有点微妙。',
+    message: '皮下血管受损，青紫区域正在明显扩散。',
     accent: '#a878ff',
     zone: '软组织区',
+    safety: '轻微瘀青可以发生；若面积持续扩大或伴随明显肿痛，应寻求医疗建议。',
   },
   BONE: {
     icon: '◆',
     title: '碰到硬组织',
-    message: '针尖“叮”地弹了一下，角度明显不对。',
+    message: '针尖“叮”地回弹，伴随尖锐的撞击感。',
     accent: '#f4dfb5',
     zone: '硬组织区',
+    safety: '现实中出现锐利或割裂样疼痛时，不应为了追求得气而强行继续刺激。',
   },
 }
 
@@ -199,23 +213,50 @@ function classifyNeedleEvent({
   dx,
   dy,
   correctSurface,
+  surfaceIssue,
+  sourcePoint,
 }: {
   distance: number
   dx: number
   dy: number
   correctSurface: boolean
+  surfaceIssue: string | null
+  sourcePoint: THREE.Vector3
 }): { result: NeedleResult; eventZone: EventZone } {
-  if (!correctSurface) return { result: 'BONE', eventZone: 'HARD_TISSUE' }
-  if (distance <= 0.82) return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
-  if (distance <= 1.5) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
-
-  const angle = Math.atan2(dy, dx)
-  if (angle >= -Math.PI / 3 && angle < Math.PI / 3) {
-    return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+  if (correctSurface && distance <= 0.82) {
+    return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
   }
-  if (angle >= Math.PI / 3) {
+  if (correctSurface && distance <= 1.45) {
+    return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
+  }
+
+  const spatialNoise =
+    Math.abs(
+      Math.sin(
+        sourcePoint.x * 12.9898 +
+          sourcePoint.y * 78.233 +
+          sourcePoint.z * 37.719 +
+          Math.atan2(dy, dx) * 9.17,
+      ) * 43758.5453,
+    ) % 1
+
+  if (!correctSurface) {
+    if (surfaceIssue?.includes('侧面')) {
+      return spatialNoise < 0.28
+        ? { result: 'NERVE', eventZone: 'NERVE_PATH' }
+        : { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
+    }
+    if (spatialNoise < 0.38) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+    if (spatialNoise < 0.62) return { result: 'NERVE', eventZone: 'NERVE_PATH' }
+    if (spatialNoise < 0.94) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
+    return { result: 'BONE', eventZone: 'HARD_TISSUE' }
+  }
+
+  if (spatialNoise < 0.42) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+  if (spatialNoise < 0.7) {
     return { result: 'NERVE', eventZone: 'NERVE_PATH' }
   }
+  if (spatialNoise < 0.93) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
   return { result: 'BONE', eventZone: 'HARD_TISSUE' }
 }
 
@@ -372,6 +413,110 @@ function TargetMarker({ target }: { target: NeedleTarget }) {
   )
 }
 
+function SkinMarkMaterial({
+  color,
+  opacity,
+}: {
+  color: string
+  opacity: number
+}) {
+  return (
+    <meshBasicMaterial
+      color={color}
+      transparent
+      opacity={opacity}
+      depthTest
+      depthWrite={false}
+      polygonOffset
+      polygonOffsetFactor={-5}
+      polygonOffsetUnits={-5}
+      blending={THREE.MultiplyBlending}
+      premultipliedAlpha
+      side={THREE.DoubleSide}
+    />
+  )
+}
+
+function PersistentMark({ hit }: { hit: Hit }) {
+  const position = useMemo(
+    () =>
+      hit.localPoint
+        .clone()
+        .sub(PALM_PIVOT)
+        .addScaledVector(hit.localNormal, 0.075),
+    [hit],
+  )
+  const rotation = useMemo(
+    () =>
+      new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        hit.localNormal,
+      ),
+    [hit],
+  )
+
+  return (
+    <group position={position} quaternion={rotation}>
+      {hit.result === 'BLOOD' && (
+        <>
+          <mesh>
+            <circleGeometry args={[0.38, 40]} />
+            <SkinMarkMaterial color="#8f0627" opacity={0.76} />
+          </mesh>
+          <mesh position={[0.37, -0.18, 0.006]}>
+            <circleGeometry args={[0.16, 28]} />
+            <SkinMarkMaterial color="#bd1238" opacity={0.7} />
+          </mesh>
+          <mesh position={[-0.31, 0.23, 0.008]}>
+            <circleGeometry args={[0.12, 24]} />
+            <SkinMarkMaterial color="#d31842" opacity={0.64} />
+          </mesh>
+        </>
+      )}
+      {hit.result === 'BRUISE' && (
+        <>
+          <mesh scale={[1.45, 0.92, 1]}>
+            <circleGeometry args={[0.62, 56]} />
+            <SkinMarkMaterial color="#6d3d8f" opacity={0.38} />
+          </mesh>
+          <mesh position={[0.18, -0.08, 0.007]} scale={[0.92, 1.25, 1]}>
+            <circleGeometry args={[0.43, 48]} />
+            <SkinMarkMaterial color="#394a91" opacity={0.3} />
+          </mesh>
+          <mesh position={[-0.27, 0.15, 0.009]}>
+            <circleGeometry args={[0.27, 36]} />
+            <SkinMarkMaterial color="#8b3b75" opacity={0.28} />
+          </mesh>
+        </>
+      )}
+      {hit.result === 'NERVE' && (
+        <mesh>
+          <ringGeometry args={[0.12, 0.18, 32]} />
+          <meshBasicMaterial
+            color="#679dff"
+            transparent
+            opacity={0.45}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
+      {hit.result === 'BONE' && (
+        <mesh>
+          <ringGeometry args={[0.1, 0.15, 6]} />
+          <meshBasicMaterial color="#d9c9aa" transparent opacity={0.38} depthWrite={false} />
+        </mesh>
+      )}
+      {hit.result === 'SUCCESS' && (
+        <mesh>
+          <ringGeometry args={[0.08, 0.12, 32]} />
+          <meshBasicMaterial color="#55d99b" transparent opacity={0.38} depthWrite={false} />
+        </mesh>
+      )}
+    </group>
+  )
+}
+
 function Needle({ hit }: { hit: Hit }) {
   const needle = useRef<THREE.Group>(null)
   const elapsed = useRef(0)
@@ -480,39 +625,65 @@ function SuccessEffect() {
 
 function BloodEffect() {
   const group = useRef<THREE.Group>(null)
+  const startedAt = useRef<number | null>(null)
   useFrame(({ clock }) => {
     if (!group.current) return
-    const pulse = 0.9 + Math.sin(clock.elapsedTime * 9) * 0.08
-    group.current.scale.setScalar(pulse)
-    group.current.rotation.z += 0.006
+    if (startedAt.current === null) startedAt.current = clock.elapsedTime
+    const elapsed = clock.elapsedTime - startedAt.current
+    const burst = THREE.MathUtils.clamp(elapsed / 0.75, 0, 1)
+    const pulse = 1 + Math.sin(elapsed * 16) * 0.1
+    group.current.scale.setScalar((0.25 + burst * 1.45) * pulse)
+    group.current.position.z = 0.04 + Math.sin(elapsed * 10) * 0.018
+    group.current.rotation.z += 0.014
   })
   return (
     <group ref={group}>
-      {Array.from({ length: 12 }, (_, index) => {
-        const angle = (index / 12) * Math.PI * 2 + (index % 3) * 0.18
-        const radius = 0.12 + (index % 4) * 0.075
+      {Array.from({ length: 34 }, (_, index) => {
+        const angle = (index / 34) * Math.PI * 2 + (index % 5) * 0.23
+        const radius = 0.1 + (index % 8) * 0.075
         return (
           <mesh
             key={index}
             position={[
               Math.cos(angle) * radius,
               Math.sin(angle) * radius,
-              0.06 + (index % 3) * 0.055,
+              0.06 + (index % 6) * 0.075,
             ]}
-            scale={[0.7, 0.7, 1.5]}
+            scale={[0.68, 0.68, 1.7]}
           >
-            <sphereGeometry args={[0.045 - (index % 3) * 0.008, 10, 10]} />
+            <sphereGeometry args={[0.052 - (index % 4) * 0.007, 10, 10]} />
             <meshPhysicalMaterial
-              color="#c90f38"
-              emissive="#6b0019"
-              emissiveIntensity={0.55}
-              roughness={0.2}
-              clearcoat={0.8}
+              color={index % 3 === 0 ? '#ff1647' : '#b90630'}
+              emissive="#7d001f"
+              emissiveIntensity={0.75}
+              roughness={0.16}
+              clearcoat={0.9}
             />
           </mesh>
         )
       })}
-      <pointLight color="#ff214d" intensity={3.5} distance={1.8} />
+      {Array.from({ length: 4 }, (_, index) => {
+        const angle = (index / 4) * Math.PI * 2 + 0.4
+        return (
+          <group
+            key={`jet-${index}`}
+            rotation={[Math.sin(angle) * 0.32, Math.cos(angle) * 0.32, angle]}
+          >
+            <mesh position={[0, 0, 0.28]} rotation={[Math.PI / 2, 0, 0]}>
+              <coneGeometry args={[0.065, 0.58, 12]} />
+              <meshPhysicalMaterial
+                color="#d8083b"
+                emissive="#8b001f"
+                emissiveIntensity={0.8}
+                roughness={0.18}
+                transparent
+                opacity={0.9}
+              />
+            </mesh>
+          </group>
+        )
+      })}
+      <pointLight color="#ff1647" intensity={7.5} distance={2.8} />
     </group>
   )
 }
@@ -561,21 +732,29 @@ function NerveEffect() {
 function BruiseEffect() {
   const bruise = useRef<THREE.Mesh>(null)
   const material = useRef<THREE.MeshBasicMaterial>(null)
+  const startedAt = useRef<number | null>(null)
   useFrame(({ clock }) => {
-    const cycle = Math.min((clock.elapsedTime % 4) / 1.2, 1)
-    bruise.current?.scale.setScalar(0.3 + cycle * 1.35)
-    if (material.current) material.current.opacity = 0.42 - cycle * 0.1
+    if (startedAt.current === null) startedAt.current = clock.elapsedTime
+    const elapsed = clock.elapsedTime - startedAt.current
+    const progress = THREE.MathUtils.smoothstep(
+      THREE.MathUtils.clamp(elapsed / 2.1, 0, 1),
+      0,
+      1,
+    )
+    bruise.current?.scale.set(0.35 + progress * 1.7, 0.3 + progress * 1.15, 1)
+    if (material.current) material.current.opacity = 0.25 + progress * 0.24
   })
   return (
     <mesh ref={bruise} position={[0, 0, 0.035]}>
-      <circleGeometry args={[0.34, 48]} />
+      <circleGeometry args={[0.4, 56]} />
       <meshBasicMaterial
         ref={material}
-        color="#673a91"
+        color="#5d367f"
         transparent
-        opacity={0.4}
+        opacity={0.25}
         depthWrite={false}
         blending={THREE.MultiplyBlending}
+        premultipliedAlpha
       />
     </mesh>
   )
@@ -630,11 +809,13 @@ function RealisticHand({
   disabled,
   target,
   activeResult,
+  treatmentHits,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
+  treatmentHits: Hit[]
 }) {
   const { scene } = useGLTF('/models/hand.glb')
   const pointerStart = useRef<PointerStart | null>(null)
@@ -737,15 +918,23 @@ function RealisticHand({
       dx: sourcePoint.x - target.point.x,
       dy: sourcePoint.y - target.point.y,
       correctSurface,
+      surfaceIssue,
+      sourcePoint,
     })
     const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
       normal,
     )
+    const localNormal = normal
+      .clone()
+      .transformDirection(hand.matrixWorld.clone().invert())
+      .normalize()
 
     onHit({
       point: markerPoint,
+      localPoint: sourcePoint.clone(),
+      localNormal,
       label: `${side} · ${region}`,
       rotation: markerRotation,
       distance,
@@ -769,6 +958,12 @@ function RealisticHand({
     >
       <primitive object={hand} />
       <TargetMarker target={target} />
+      {treatmentHits.map((pastHit) => (
+        <PersistentMark
+          key={`${pastHit.needleNumber}-${pastHit.localPoint.toArray().join('-')}`}
+          hit={pastHit}
+        />
+      ))}
     </group>
   )
 }
@@ -778,11 +973,13 @@ function Scene({
   hit,
   disabled,
   target,
+  treatmentHits,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
+  treatmentHits: Hit[]
 }) {
   return (
     <>
@@ -804,6 +1001,7 @@ function Scene({
           disabled={disabled}
           target={target}
           activeResult={hit?.result ?? null}
+          treatmentHits={treatmentHits}
         />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
@@ -816,6 +1014,7 @@ function Scene({
       <ContactShadows position={[0, -2.05, 0]} opacity={0.42} scale={7} blur={2.8} far={5} />
       <OrbitControls
         makeDefault
+        enabled={!disabled}
         target={[0, 0, 0]}
         enablePan={false}
         minDistance={4}
@@ -832,6 +1031,7 @@ function Scene({
 
 export default function App() {
   const [hit, setHit] = useState<Hit | null>(null)
+  const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
   const [needleCount, setNeedleCount] = useState(0)
   const [showFeedback, setShowFeedback] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
@@ -841,8 +1041,10 @@ export default function App() {
   const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
     if (hit || needleCount >= MAX_NEEDLES) return
     const nextCount = needleCount + 1
+    const recordedHit = { ...nextHit, needleNumber: nextCount }
     setNeedleCount(nextCount)
-    setHit({ ...nextHit, needleNumber: nextCount })
+    setHit(recordedHit)
+    setTreatmentHits((current) => [...current, recordedHit])
     setShowFeedback(false)
     playNeedleSound(nextHit.result)
     if ('vibrate' in navigator) {
@@ -859,7 +1061,7 @@ export default function App() {
 
   useEffect(() => {
     if (!hit || showFeedback) return
-    const timer = window.setTimeout(() => setShowFeedback(true), 1350)
+    const timer = window.setTimeout(() => setShowFeedback(true), 2400)
     return () => window.clearTimeout(timer)
   }, [hit, showFeedback])
 
@@ -867,6 +1069,7 @@ export default function App() {
     if (needleCount >= MAX_NEEDLES) {
       setNeedleCount(0)
       setSessionTargets(createTreatmentPlan())
+      setTreatmentHits([])
     }
     setHit(null)
     setShowFeedback(false)
@@ -901,7 +1104,13 @@ export default function App() {
           dpr={[1, 1.75]}
           gl={{ antialias: true, powerPreference: 'high-performance' }}
         >
-          <Scene onHit={handleHit} hit={hit} disabled={Boolean(hit)} target={activeTarget} />
+          <Scene
+            onHit={handleHit}
+            hit={hit}
+            disabled={Boolean(hit)}
+            target={activeTarget}
+            treatmentHits={treatmentHits}
+          />
         </Canvas>
 
         <div className="scene-badge">
@@ -939,7 +1148,14 @@ export default function App() {
         </div>
         <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
           {Array.from({ length: MAX_NEEDLES }, (_, index) => (
-            <span key={index} className={index < needleCount ? 'done' : ''} />
+            <span
+              key={index}
+              className={
+                treatmentHits[index]
+                  ? `done ${treatmentHits[index].result.toLowerCase()}`
+                  : ''
+              }
+            />
           ))}
         </div>
       </footer>
@@ -970,6 +1186,7 @@ export default function App() {
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
               <strong>{hit.correctSurface ? hit.distance.toFixed(1) : hit.surfaceIssue}</strong>
             </div>
+            <p className="safety-note">{feedback.safety}</p>
             <button type="button" onClick={continueGame}>
               {needleCount >= MAX_NEEDLES ? '再来一轮' : '继续下一针'}
             </button>
