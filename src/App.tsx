@@ -10,6 +10,7 @@ type Hit = {
   label: string
   rotation: THREE.Quaternion
   distance: number
+  correctSurface: boolean
   result: NeedleResult
   needleNumber: number
 }
@@ -124,7 +125,7 @@ function TargetMarker() {
             color="#74f1bc"
             transparent
             opacity={0.8}
-            depthTest={false}
+            depthTest
             toneMapped={false}
             side={THREE.DoubleSide}
           />
@@ -135,7 +136,7 @@ function TargetMarker() {
             color="#d9ffef"
             transparent
             opacity={0.95}
-            depthTest={false}
+            depthTest
             toneMapped={false}
           />
         </mesh>
@@ -242,13 +243,20 @@ function RealisticHand({
     }
 
     const sourcePoint = hand.worldToLocal(event.point.clone())
-    const side = sourcePoint.z >= PALM_PIVOT.z ? '手心' : '手背'
+    const correctSurface = sourcePoint.z >= PALM_PIVOT.z
+    const side = correctSurface ? '手心' : '手背'
     const region = classifyHandRegion(sourcePoint)
     const distance = Math.hypot(
       sourcePoint.x - TARGET_POINT.x,
       sourcePoint.y - TARGET_POINT.y,
     )
-    const result: NeedleResult = distance <= 0.9 ? 'SUCCESS' : distance <= 2.2 ? 'NEAR' : 'MISS'
+    const result: NeedleResult = !correctSurface
+      ? 'MISS'
+      : distance <= 0.9
+        ? 'SUCCESS'
+        : distance <= 2.2
+          ? 'NEAR'
+          : 'MISS'
     const normal = event.face
       ? event.face.normal
           .clone()
@@ -266,6 +274,7 @@ function RealisticHand({
       label: `${side} · ${region}`,
       rotation: markerRotation,
       distance,
+      correctSurface,
       result,
     })
   }
@@ -424,8 +433,8 @@ export default function App() {
             <h2 id="feedback-title">{feedback.title}</h2>
             <p>{feedback.message}</p>
             <div className="distance-row">
-              <span>落点误差</span>
-              <strong>{hit.distance.toFixed(1)}</strong>
+              <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
+              <strong>{hit.correctSurface ? hit.distance.toFixed(1) : '手背（错误）'}</strong>
             </div>
             <button type="button" onClick={continueGame}>
               {needleCount >= MAX_NEEDLES ? '再来一轮' : '继续下一针'}
