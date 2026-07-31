@@ -36,16 +36,26 @@ function RealisticHand({ onHit }: { onHit: (hit: Hit) => void }) {
   useEffect(() => {
     hand.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return
+
+      // The source scene contains four overlapping topology-study stages.
+      // Keep only the finished hand mesh instead of rendering the study layers.
+      object.visible = object.name === 'Object_5'
+      if (!object.visible) return
+
       object.castShadow = true
       object.receiveShadow = true
-
-      const materials = Array.isArray(object.material) ? object.material : [object.material]
-      materials.forEach((material) => {
-        if (!(material instanceof THREE.MeshStandardMaterial)) return
-        material.roughness = Math.max(material.roughness, 0.48)
-        material.metalness = 0
-        material.needsUpdate = true
+      object.material = new THREE.MeshPhysicalMaterial({
+        color: '#f2aa8f',
+        roughness: 0.7,
+        metalness: 0,
+        clearcoat: 0.16,
+        clearcoatRoughness: 0.72,
+        sheen: 0.32,
+        sheenColor: new THREE.Color('#ffb0a5'),
+        emissive: new THREE.Color('#421418'),
+        emissiveIntensity: 0.025,
       })
+      object.material.needsUpdate = true
     })
   }, [hand])
 
@@ -71,12 +81,13 @@ function Scene({ onHit, hit }: { onHit: (hit: Hit) => void; hit: Hit | null }) {
       <ambientLight intensity={0.8} />
       <directionalLight
         position={[3, 5, 4]}
-        intensity={3}
-        color="#fff0dc"
+        intensity={3.3}
+        color="#fff1df"
         castShadow
         shadow-mapSize={[1024, 1024]}
       />
       <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
+      <pointLight position={[3.2, -0.6, 2.6]} color="#ff7398" intensity={13} distance={7} />
       <Suspense fallback={null}>
         <RealisticHand onHit={onHit} />
         <Environment preset="studio" environmentIntensity={0.45} />
@@ -134,7 +145,7 @@ export default function App() {
 
         <div className="scene-badge">
           <span>01</span>
-          写实手部模型
+          暖色游戏手
         </div>
 
         <div className="gesture-guide" aria-hidden="true">
