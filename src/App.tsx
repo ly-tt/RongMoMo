@@ -51,6 +51,17 @@ type PatientState = {
   needleCount: number
 }
 
+export type PatientProfile = {
+  id: string
+  name: string
+  age: number
+  painTolerance: number
+  vascularDifficulty: number
+  personality: string
+  openingLine: string
+  trustSensitivity: number
+}
+
 type StateDelta = Omit<PatientState, 'needleCount'>
 
 type TreatmentSummary = {
@@ -71,6 +82,45 @@ const INITIAL_PATIENT_STATE: PatientState = {
   trust: 72,
   needleCount: 0,
 }
+
+const PATIENT_ARCHETYPES = [
+  {
+    name: '小王',
+    personality: '嘴硬型',
+    openingLine: '“我一点都不怕疼，真的。你先把针拿远一点。”',
+    trustSensitivity: 1.15,
+  },
+  {
+    name: '林知夏',
+    personality: '冷静观察型',
+    openingLine: '“我会认真记住每一针的位置，请开始吧。”',
+    trustSensitivity: 0.82,
+  },
+  {
+    name: '陈叔',
+    personality: '话痨型',
+    openingLine: '“别紧张，我不紧张。对了，你这是第几次扎？”',
+    trustSensitivity: 1.02,
+  },
+  {
+    name: '阿柚',
+    personality: '好奇型',
+    openingLine: '“扎准了会发光吗？扎偏了……也会发光吗？”',
+    trustSensitivity: 0.92,
+  },
+  {
+    name: '周末',
+    personality: '戏精型',
+    openingLine: '“请给我一个体面、安静、最好零痛感的疗程。”',
+    trustSensitivity: 1.28,
+  },
+  {
+    name: '唐圆圆',
+    personality: '乐观型',
+    openingLine: '“放心扎吧，我今天的运气一向不错。”',
+    trustSensitivity: 0.72,
+  },
+]
 
 const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
   SUCCESS: { pain: 2, bruise: 0, bleeding: 0, numb: 7, trust: 8 },
@@ -195,8 +245,46 @@ function clampState(value: number) {
   return Math.round(THREE.MathUtils.clamp(value, 0, 100))
 }
 
-function applyNeedleResult(state: PatientState, result: NeedleResult): PatientState {
+// AI integration seam: Coze Workflow can replace this generator while keeping
+// the same PatientProfile contract and the rest of the game unchanged.
+export function createLocalPatient(): PatientProfile {
+  const archetype = PATIENT_ARCHETYPES[Math.floor(Math.random() * PATIENT_ARCHETYPES.length)]
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    ...archetype,
+    age: Math.floor(20 + Math.random() * 35),
+    painTolerance: Math.floor(28 + Math.random() * 62),
+    vascularDifficulty: Math.floor(25 + Math.random() * 66),
+  }
+}
+
+function createInitialPatientState(patient: PatientProfile): PatientState {
+  return {
+    ...INITIAL_PATIENT_STATE,
+    pain: clampState(5 + (100 - patient.painTolerance) * 0.04),
+    trust: clampState(76 - (patient.trustSensitivity - 0.7) * 15),
+  }
+}
+
+function getPatientImpact(result: NeedleResult, patient: PatientProfile): StateDelta {
   const delta = RESULT_IMPACT[result]
+  const painMultiplier = 0.72 + (100 - patient.painTolerance) * 0.008
+  const bleedingMultiplier = 0.7 + patient.vascularDifficulty * 0.007
+  return {
+    pain: Math.round(delta.pain * painMultiplier),
+    bruise: delta.bruise,
+    bleeding: Math.round(delta.bleeding * bleedingMultiplier),
+    numb: delta.numb,
+    trust: Math.round(delta.trust * patient.trustSensitivity),
+  }
+}
+
+function applyNeedleResult(
+  state: PatientState,
+  result: NeedleResult,
+  patient: PatientProfile,
+): PatientState {
+  const delta = getPatientImpact(result, patient)
   return {
     pain: clampState(state.pain + delta.pain),
     bruise: clampState(state.bruise + delta.bruise),
@@ -212,6 +300,7 @@ function applyNeedleResult(state: PatientState, result: NeedleResult): PatientSt
 export function createLocalTreatmentSummary(
   patientState: PatientState,
   hits: Hit[],
+  patient: PatientProfile,
 ): TreatmentSummary {
   const resultCount = (result: NeedleResult) =>
     hits.filter((hit) => hit.result === result).length
@@ -233,7 +322,7 @@ export function createLocalTreatmentSummary(
       rating: 5,
       title: '稳准轻，患者很买账',
       review: `${successCount} 针命中穴位，整段疗程节奏稳定，几乎没有让患者产生警惕。`,
-      dialog: '“原来针灸也可以这么轻松，下次还找你。”',
+      dialog: `${patient.name}：“原来针灸也可以这么轻松，下次还找你。”`,
     }
   }
   if (satisfaction >= 70) {
@@ -244,7 +333,7 @@ export function createLocalTreatmentSummary(
       review: bloodCount
         ? `出现了 ${bloodCount} 次出血事件，但整体状态尚可，患者决定先观察你的后续表现。`
         : '偶有偏差，好在反应及时，患者的信任还没有掉出安全线。',
-      dialog: '“还行，不过下一针能不能再轻一点？”',
+      dialog: `${patient.name}：“还行，不过下一针能不能再轻一点？”`,
     }
   }
   if (satisfaction >= 50) {
@@ -255,7 +344,7 @@ export function createLocalTreatmentSummary(
       review: nerveCount
         ? `神经刺激出现 ${nerveCount} 次，麻木和疼痛累积明显，精准度仍需提升。`
         : '偏针事件较多，患者全程盯着你的手，信任值勉强保住。',
-      dialog: '“我相信你……但我的手好像有自己的意见。”',
+      dialog: `${patient.name}：“我相信你……但我的手好像有自己的意见。”`,
     }
   }
   return {
@@ -266,7 +355,7 @@ export function createLocalTreatmentSummary(
       boneCount > 0
         ? `硬组织刺激出现 ${boneCount} 次，疼痛和信任损失成为本次疗程的主要问题。`
         : '多项状态已经进入高压区，这一局的首要任务不是追求得气，而是重新找准位置。',
-    dialog: '“下次见面……我们还是先握个手吧。”',
+    dialog: `${patient.name}：“下次见面……我们还是先握个手吧。”`,
   }
 }
 
@@ -330,6 +419,7 @@ function classifyNeedleEvent({
   correctSurface,
   surfaceIssue,
   sourcePoint,
+  vascularDifficulty,
 }: {
   distance: number
   dx: number
@@ -337,6 +427,7 @@ function classifyNeedleEvent({
   correctSurface: boolean
   surfaceIssue: string | null
   sourcePoint: THREE.Vector3
+  vascularDifficulty: number
 }): { result: NeedleResult; eventZone: EventZone } {
   if (correctSurface && distance <= 0.82) {
     return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
@@ -354,6 +445,7 @@ function classifyNeedleEvent({
           Math.atan2(dy, dx) * 9.17,
       ) * 43758.5453,
     ) % 1
+  const bloodBias = THREE.MathUtils.clamp((vascularDifficulty - 50) / 250, -0.1, 0.18)
 
   if (!correctSurface) {
     if (surfaceIssue?.includes('侧面')) {
@@ -361,14 +453,16 @@ function classifyNeedleEvent({
         ? { result: 'NERVE', eventZone: 'NERVE_PATH' }
         : { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
     }
-    if (spatialNoise < 0.38) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
-    if (spatialNoise < 0.62) return { result: 'NERVE', eventZone: 'NERVE_PATH' }
+    const bloodThreshold = 0.38 + bloodBias
+    if (spatialNoise < bloodThreshold) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+    if (spatialNoise < bloodThreshold + 0.24) return { result: 'NERVE', eventZone: 'NERVE_PATH' }
     if (spatialNoise < 0.94) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
     return { result: 'BONE', eventZone: 'HARD_TISSUE' }
   }
 
-  if (spatialNoise < 0.42) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
-  if (spatialNoise < 0.7) {
+  const bloodThreshold = 0.42 + bloodBias
+  if (spatialNoise < bloodThreshold) return { result: 'BLOOD', eventZone: 'CAPILLARY' }
+  if (spatialNoise < bloodThreshold + 0.28) {
     return { result: 'NERVE', eventZone: 'NERVE_PATH' }
   }
   if (spatialNoise < 0.93) return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
@@ -1005,12 +1099,14 @@ function RealisticHand({
   target,
   activeResult,
   treatmentHits,
+  vascularDifficulty,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
   treatmentHits: Hit[]
+  vascularDifficulty: number
 }) {
   const { scene } = useGLTF('/models/hand.glb')
   const pointerStart = useRef<PointerStart | null>(null)
@@ -1115,6 +1211,7 @@ function RealisticHand({
       correctSurface,
       surfaceIssue,
       sourcePoint,
+      vascularDifficulty,
     })
     const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
@@ -1169,12 +1266,14 @@ function Scene({
   disabled,
   target,
   treatmentHits,
+  vascularDifficulty,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
   treatmentHits: Hit[]
+  vascularDifficulty: number
 }) {
   return (
     <>
@@ -1197,6 +1296,7 @@ function Scene({
           target={target}
           activeResult={hit?.result ?? null}
           treatmentHits={treatmentHits}
+          vascularDifficulty={vascularDifficulty}
         />
         <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
@@ -1221,6 +1321,68 @@ function Scene({
         touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE }}
       />
     </>
+  )
+}
+
+function HomePage({
+  patient,
+  onRegenerate,
+  onStart,
+}: {
+  patient: PatientProfile
+  onRegenerate: () => void
+  onStart: () => void
+}) {
+  return (
+    <main className="home-shell">
+      <div className="home-orb home-orb-one" aria-hidden="true" />
+      <div className="home-orb home-orb-two" aria-hidden="true" />
+
+      <header className="home-header">
+        <p className="eyebrow">NEEDLE ROULETTE · AI PATIENT</p>
+        <span className="home-tag">移动端 3D 互动小游戏</span>
+        <h1>一针<br />见血？</h1>
+        <p>旋转手部寻找穴位，在五针之内赢得这位患者的信任。</p>
+      </header>
+
+      <section className="patient-card" aria-label="本轮虚拟患者">
+        <div className="patient-card-top">
+          <div className="patient-avatar" aria-hidden="true">
+            {patient.name.slice(0, 1)}
+          </div>
+          <div>
+            <p>本轮患者</p>
+            <h2>{patient.name} <small>{patient.age} 岁</small></h2>
+            <span>{patient.personality}</span>
+          </div>
+          <button type="button" onClick={onRegenerate}>换一位</button>
+        </div>
+
+        <blockquote>{patient.openingLine}</blockquote>
+
+        <div className="patient-traits">
+          <div>
+            <span>怕疼程度</span>
+            <strong>{100 - patient.painTolerance}</strong>
+            <i><b style={{ width: `${100 - patient.painTolerance}%` }} /></i>
+          </div>
+          <div>
+            <span>血管难度</span>
+            <strong>{patient.vascularDifficulty}</strong>
+            <i><b style={{ width: `${patient.vascularDifficulty}%` }} /></i>
+          </div>
+        </div>
+      </section>
+
+      <button className="start-treatment" type="button" onClick={onStart}>
+        <span>开始疗程</span>
+        <small>共 5 针 · 约 2 分钟</small>
+      </button>
+
+      <p className="home-disclaimer">
+        患者由本地游戏引擎生成，AI 接口已预留。本作品不是医学训练软件。
+      </p>
+    </main>
   )
 }
 
@@ -1253,26 +1415,28 @@ function PatientStatus({ state }: { state: PatientState }) {
 }
 
 function TreatmentSummaryPage({
+  patient,
   patientState,
   hits,
   targets,
   onRestart,
 }: {
+  patient: PatientProfile
   patientState: PatientState
   hits: Hit[]
   targets: NeedleTarget[]
   onRestart: () => void
 }) {
   const summary = useMemo(
-    () => createLocalTreatmentSummary(patientState, hits),
-    [patientState, hits],
+    () => createLocalTreatmentSummary(patientState, hits, patient),
+    [patientState, hits, patient],
   )
 
   return (
     <main className="summary-shell">
       <header className="summary-header">
         <p className="eyebrow">NEEDLE ROULETTE · SESSION REPORT</p>
-        <span>疗程完成</span>
+        <span>{patient.name} · 疗程完成</span>
         <h1>本次表现<br />有点东西</h1>
         <p>{summary.title}</p>
       </header>
@@ -1327,7 +1491,7 @@ function TreatmentSummaryPage({
       </section>
 
       <button className="restart-button" type="button" onClick={onRestart}>
-        再来一个疗程
+        接诊下一位患者
       </button>
       <p className="summary-disclaimer">
         当前对白由本地规则生成，扣子/百炼接口将在下一阶段接入。内容仅作游戏科普。
@@ -1337,12 +1501,14 @@ function TreatmentSummaryPage({
 }
 
 export default function App() {
+  const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
+  const [started, setStarted] = useState(false)
   const [hit, setHit] = useState<Hit | null>(null)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
   const [needleCount, setNeedleCount] = useState(0)
-  const [patientState, setPatientState] = useState<PatientState>(() => ({
-    ...INITIAL_PATIENT_STATE,
-  }))
+  const [patientState, setPatientState] = useState<PatientState>(() =>
+    createInitialPatientState(patient),
+  )
   const [showFeedback, setShowFeedback] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
@@ -1356,7 +1522,7 @@ export default function App() {
     setNeedleCount(nextCount)
     setHit(recordedHit)
     setTreatmentHits((current) => [...current, recordedHit])
-    setPatientState((current) => applyNeedleResult(current, nextHit.result))
+    setPatientState((current) => applyNeedleResult(current, nextHit.result, patient))
     setShowFeedback(false)
     playNeedleSound(nextHit.result)
     if ('vibrate' in navigator) {
@@ -1388,18 +1554,36 @@ export default function App() {
     setShowFeedback(false)
   }
 
-  const restartTreatment = () => {
+  const resetTreatment = (nextPatient: PatientProfile) => {
     setHit(null)
     setTreatmentHits([])
     setNeedleCount(0)
-    setPatientState({ ...INITIAL_PATIENT_STATE })
+    setPatientState(createInitialPatientState(nextPatient))
     setShowFeedback(false)
     setShowSummary(false)
     setSessionTargets(createTreatmentPlan())
   }
 
+  const regeneratePatient = () => {
+    const nextPatient = createLocalPatient()
+    setPatient(nextPatient)
+    resetTreatment(nextPatient)
+  }
+
+  const startTreatment = () => {
+    resetTreatment(patient)
+    setStarted(true)
+  }
+
+  const restartTreatment = () => {
+    const nextPatient = createLocalPatient()
+    setPatient(nextPatient)
+    resetTreatment(nextPatient)
+    setStarted(false)
+  }
+
   const feedback = hit ? RESULT_COPY[hit.result] : null
-  const activeDelta = hit ? RESULT_IMPACT[hit.result] : null
+  const activeDelta = hit ? getPatientImpact(hit.result, patient) : null
   const targetIndex = Math.min(
     hit ? Math.max(needleCount - 1, 0) : needleCount,
     MAX_NEEDLES - 1,
@@ -1407,9 +1591,20 @@ export default function App() {
   const activeTarget = sessionTargets[targetIndex]
   const activeEffect = hit?.result.toLowerCase() ?? ''
 
+  if (!started) {
+    return (
+      <HomePage
+        patient={patient}
+        onRegenerate={regeneratePatient}
+        onStart={startTreatment}
+      />
+    )
+  }
+
   if (showSummary) {
     return (
       <TreatmentSummaryPage
+        patient={patient}
         patientState={patientState}
         hits={treatmentHits}
         targets={sessionTargets}
@@ -1423,7 +1618,7 @@ export default function App() {
       {hit && <div className="screen-effect" aria-hidden="true" />}
       <header className="topbar">
         <div>
-          <p className="eyebrow">NEEDLE ROULETTE · FIRST SESSION</p>
+          <p className="eyebrow">{patient.name} · {patient.personality}</p>
           <h1>一针见血？</h1>
         </div>
         <div className="needle-progress" aria-label={`第 ${Math.min(needleCount + 1, 5)} 针，共 5 针`}>
@@ -1447,6 +1642,7 @@ export default function App() {
             disabled={Boolean(hit)}
             target={activeTarget}
             treatmentHits={treatmentHits}
+            vascularDifficulty={patient.vascularDifficulty}
           />
         </Canvas>
 

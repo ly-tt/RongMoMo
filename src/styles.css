@@ -88,6 +88,231 @@ h1 {
   font-size: 12px;
 }
 
+.home-shell {
+  position: relative;
+  width: min(100%, 520px);
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: max(34px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    linear-gradient(180deg, rgba(8, 10, 18, 0.04), #080a12 76%),
+    #080a12;
+}
+
+.home-orb {
+  position: absolute;
+  z-index: -1;
+  border-radius: 50%;
+  filter: blur(3px);
+  pointer-events: none;
+}
+
+.home-orb-one {
+  width: 330px;
+  height: 330px;
+  top: -150px;
+  right: -120px;
+  background: radial-gradient(circle at 42% 55%, rgba(255, 67, 111, 0.42), transparent 66%);
+}
+
+.home-orb-two {
+  width: 280px;
+  height: 280px;
+  top: 250px;
+  left: -170px;
+  background: radial-gradient(circle, rgba(91, 109, 255, 0.23), transparent 68%);
+}
+
+.home-header {
+  padding: 2px 3px 22px;
+}
+
+.home-tag {
+  margin: 16px 0 12px;
+  display: inline-flex;
+  padding: 6px 10px;
+  border: 1px solid rgba(103, 237, 176, 0.19);
+  border-radius: 99px;
+  color: #83d9ae;
+  background: rgba(103, 237, 176, 0.055);
+  font-size: 9px;
+}
+
+.home-header h1 {
+  font-size: clamp(62px, 19vw, 90px);
+  line-height: 0.82;
+  letter-spacing: -0.09em;
+}
+
+.home-header > p:last-child {
+  width: min(88%, 360px);
+  margin: 18px 0 0;
+  color: #989aa8;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.patient-card {
+  margin-top: auto;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 4% 0%, rgba(255, 67, 111, 0.11), transparent 34%),
+    rgba(255, 255, 255, 0.035);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(16px);
+}
+
+.patient-card-top {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.patient-avatar {
+  width: 47px;
+  height: 47px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 88, 127, 0.35);
+  border-radius: 16px;
+  color: #ff7897;
+  background: linear-gradient(145deg, rgba(255, 67, 111, 0.19), rgba(91, 109, 255, 0.08));
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.patient-card-top > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+
+.patient-card-top p {
+  margin: 0 0 2px;
+  color: #6f7180;
+  font-size: 8px;
+  letter-spacing: 0.13em;
+}
+
+.patient-card-top h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.patient-card-top h2 small {
+  color: #777987;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.patient-card-top div > span {
+  color: #ff7897;
+  font-size: 9px;
+}
+
+.patient-card-top button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 99px;
+  color: #afb0bd;
+  background: rgba(255, 255, 255, 0.035);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.patient-card blockquote {
+  margin: 15px 0;
+  padding: 11px 13px;
+  border-left: 2px solid #ff436f;
+  border-radius: 3px 12px 12px 3px;
+  color: #c7c4c2;
+  background: rgba(255, 67, 111, 0.05);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.patient-traits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.patient-traits > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px;
+}
+
+.patient-traits span {
+  color: #777987;
+  font-size: 9px;
+}
+
+.patient-traits strong {
+  color: #ece8e2;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+}
+
+.patient-traits i {
+  grid-column: 1 / -1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.patient-traits b {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #77a7ff, #ff436f);
+}
+
+.start-treatment {
+  width: 100%;
+  min-height: 58px;
+  margin-top: 12px;
+  padding: 0 19px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 18px;
+  color: #090b10;
+  background: linear-gradient(135deg, #ff7797, #ff365f);
+  box-shadow: 0 16px 36px rgba(255, 54, 95, 0.22);
+  font: inherit;
+  cursor: pointer;
+}
+
+.start-treatment span {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.start-treatment small {
+  color: rgba(9, 11, 16, 0.62);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.home-disclaimer {
+  margin: 11px 10px 0;
+  color: #575967;
+  text-align: center;
+  font-size: 8px;
+  line-height: 1.55;
+}
+
 .patient-status {
   padding: 10px 11px;
   display: grid;
