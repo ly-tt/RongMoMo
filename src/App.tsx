@@ -1,5 +1,5 @@
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
-import { ContactShadows, Environment, OrbitControls, useGLTF } from '@react-three/drei'
+import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
@@ -1108,7 +1108,7 @@ function RealisticHand({
   treatmentHits: Hit[]
   vascularDifficulty: number
 }) {
-  const { scene } = useGLTF('/models/hand.glb')
+  const { scene } = useGLTF('/models/hand.glb', false)
   const pointerStart = useRef<PointerStart | null>(null)
   const handGroup = useRef<THREE.Group>(null)
   const { hand } = useMemo(() => {
@@ -1298,7 +1298,6 @@ function Scene({
           treatmentHits={treatmentHits}
           vascularDifficulty={vascularDifficulty}
         />
-        <Environment preset="studio" environmentIntensity={0.45} />
       </Suspense>
       {hit && (
         <>
@@ -1752,4 +1751,4 @@ export default function App() {
   )
 }
 
-useGLTF.preload('/models/hand.glb')
+useGLTF.preload('/models/hand.glb', false)
