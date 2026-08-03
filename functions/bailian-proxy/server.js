@@ -1,0 +1,285 @@
+import { createServer } from 'node:http'
+
+const PORT = Number(process.env.FC_SERVER_PORT || process.env.PORT || 9000)
+const PATIENT_APP_ID =
+  process.env.BAILIAN_PATIENT_APP_ID || '78d7b6cfd1c3480a950bb9a1f38e3afc'
+const REPORT_APP_ID =
+  process.env.BAILIAN_REPORT_APP_ID || '5335c37d57f94cae8324356af5117176'
+const ALLOWED_ORIGIN =
+  process.env.ALLOWED_ORIGIN || 'https://rongmomo.lyshowcase.com'
+const MAX_BODY_BYTES = 24_000
+const REQUEST_TIMEOUT_MS = 10_000
+const REQUESTS_PER_MINUTE = 15
+const requestBuckets = new Map()
+
+function setCorsHeaders(response, origin) {
+  if (origin === ALLOWED_ORIGIN) {
+    response.setHeader('Access-Control-Allow-Origin', origin)
+    response.setHeader('Vary', 'Origin')
+  }
+  response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  response.setHeader('Access-Control-Max-Age', '86400')
+}
+
+function sendJson(response, status, data, origin) {
+  setCorsHeaders(response, origin)
+  response.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  response.end(JSON.stringify(data))
+}
+
+function getClientAddress(request) {
+  return (
+    request.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    request.socket.remoteAddress ||
+    'unknown'
+  )
+}
+
+function allowRequest(request) {
+  const address = getClientAddress(request)
+  const now = Date.now()
+  const recent = (requestBuckets.get(address) || []).filter(
+    (timestamp) => now - timestamp < 60_000,
+  )
+  if (recent.length >= REQUESTS_PER_MINUTE) return false
+  recent.push(now)
+  requestBuckets.set(address, recent)
+  return true
+}
+
+async function readJsonBody(request) {
+  const chunks = []
+  let receivedBytes = 0
+
+  for await (const chunk of request) {
+    receivedBytes += chunk.length
+    if (receivedBytes > MAX_BODY_BYTES) {
+      const error = new Error('PAYLOAD_TOO_LARGE')
+      error.status = 413
+      throw error
+    }
+    chunks.push(chunk)
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    const error = new Error('INVALID_JSON')
+    error.status = 400
+    throw error
+  }
+}
+
+function parseModelJson(text) {
+  const normalized = String(text)
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+  return JSON.parse(normalized)
+}
+
+function validatePatient(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    typeof value.name === 'string' &&
+    Number.isInteger(value.age) &&
+    value.age >= 18 &&
+    value.age <= 60 &&
+    Number.isFinite(value.painTolerance) &&
+    value.painTolerance >= 0 &&
+    value.painTolerance <= 100 &&
+    Number.isFinite(value.vascularDifficulty) &&
+    value.vascularDifficulty >= 0 &&
+    value.vascularDifficulty <= 100 &&
+    typeof value.personality === 'string' &&
+    typeof value.openingDialog === 'string'
+  )
+}
+
+function validateReport(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    Number.isFinite(value.satisfaction) &&
+    value.satisfaction >= 0 &&
+    value.satisfaction <= 100 &&
+    ['S', 'A', 'B', 'C', 'D'].includes(value.rating) &&
+    typeof value.comment === 'string' &&
+    typeof value.patientDialog === 'string' &&
+    typeof value.shareText === 'string'
+  )
+}
+
+async function callBailian(appId, prompt, bizParams) {
+  const apiKey = process.env.DASHSCOPE_API_KEY
+  if (!apiKey) {
+    const error = new Error('AI_NOT_CONFIGURED')
+    error.status = 503
+    throw error
+  }
+
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  }
+  if (process.env.DASHSCOPE_WORKSPACE_ID) {
+    headers['X-DashScope-WorkSpace'] = process.env.DASHSCOPE_WORKSPACE_ID
+  }
+
+  const response = await fetch(
+    `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: {
+          prompt,
+          ...(bizParams ? { biz_params: bizParams } : {}),
+        },
+        parameters: {},
+        debug: {},
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  )
+
+  if (!response.ok) {
+    const error = new Error('AI_UPSTREAM_FAILED')
+    error.status = 502
+    throw error
+  }
+
+  const payload = await response.json()
+  if (typeof payload?.output?.text !== 'string') {
+    const error = new Error('INVALID_AI_RESPONSE')
+    error.status = 502
+    throw error
+  }
+
+  try {
+    return parseModelJson(payload.output.text)
+  } catch {
+    const error = new Error('INVALID_AI_JSON')
+    error.status = 502
+    throw error
+  }
+}
+
+async function handlePatient(request) {
+  const body = await readJsonBody(request)
+  const patient = await callBailian(
+    PATIENT_APP_ID,
+    typeof body.query === 'string'
+      ? body.query.slice(0, 200)
+      : '请随机生成一名适合本局游戏的新患者。',
+  )
+
+  if (!validatePatient(patient)) {
+    const error = new Error('INVALID_PATIENT_RESULT')
+    error.status = 502
+    throw error
+  }
+  return patient
+}
+
+async function handleReport(request) {
+  const body = await readJsonBody(request)
+  const required = ['patientJson', 'stateJson', 'recordsJson']
+  if (
+    !required.every(
+      (key) => typeof body[key] === 'string' && body[key].length <= 8_000,
+    )
+  ) {
+    const error = new Error('INVALID_REPORT_INPUT')
+    error.status = 400
+    throw error
+  }
+
+  const report = await callBailian(
+    REPORT_APP_ID,
+    '请根据本次五针记录生成疗程报告。',
+    {
+      patient_json: body.patientJson,
+      state_json: body.stateJson,
+      records_json: body.recordsJson,
+    },
+  )
+
+  if (!validateReport(report)) {
+    const error = new Error('INVALID_REPORT_RESULT')
+    error.status = 502
+    throw error
+  }
+  return report
+}
+
+const server = createServer(async (request, response) => {
+  const origin = request.headers.origin || ''
+  const pathname = new URL(request.url || '/', 'http://localhost').pathname
+
+  if (request.method === 'OPTIONS') {
+    if (origin && origin !== ALLOWED_ORIGIN) {
+      return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin)
+    }
+    setCorsHeaders(response, origin)
+    response.writeHead(204)
+    return response.end()
+  }
+
+  if (pathname === '/health' && request.method === 'GET') {
+    return sendJson(
+      response,
+      200,
+      {
+        ok: true,
+        aiConfigured: Boolean(process.env.DASHSCOPE_API_KEY),
+      },
+      origin,
+    )
+  }
+
+  if (origin && origin !== ALLOWED_ORIGIN) {
+    return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin)
+  }
+  if (request.method !== 'POST') {
+    return sendJson(response, 405, { error: 'METHOD_NOT_ALLOWED' }, origin)
+  }
+  if (!allowRequest(request)) {
+    return sendJson(response, 429, { error: 'RATE_LIMITED' }, origin)
+  }
+
+  try {
+    if (pathname === '/api/ai/patient') {
+      return sendJson(response, 200, await handlePatient(request), origin)
+    }
+    if (pathname === '/api/ai/report') {
+      return sendJson(response, 200, await handleReport(request), origin)
+    }
+    return sendJson(response, 404, { error: 'NOT_FOUND' }, origin)
+  } catch (error) {
+    const status = Number(error?.status) || 500
+    const safeErrors = new Set([
+      'PAYLOAD_TOO_LARGE',
+      'INVALID_JSON',
+      'INVALID_REPORT_INPUT',
+      'AI_NOT_CONFIGURED',
+      'AI_UPSTREAM_FAILED',
+      'INVALID_AI_RESPONSE',
+      'INVALID_AI_JSON',
+      'INVALID_PATIENT_RESULT',
+      'INVALID_REPORT_RESULT',
+    ])
+    const code = safeErrors.has(error?.message) ? error.message : 'INTERNAL_ERROR'
+    return sendJson(response, status, { error: code }, origin)
+  }
+})
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Bailian proxy listening on port ${PORT}`)
+})
