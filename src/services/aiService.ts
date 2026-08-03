@@ -22,7 +22,9 @@ export type AiReportInput = {
 }
 
 const API_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL ?? '').replace(/\/$/, '')
-const REQUEST_TIMEOUT_MS = 5000
+// Keep the browser timeout slightly above the proxy's 10 s upstream timeout,
+// otherwise a valid Bailian response can arrive after the UI has already fallen back.
+const REQUEST_TIMEOUT_MS = 12_000
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
