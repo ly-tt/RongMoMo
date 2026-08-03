@@ -562,11 +562,13 @@ h1 {
 
 .target-copy > p:last-child {
   margin: 4px 0 0;
-  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .shot-dots {
@@ -694,16 +696,34 @@ h1 {
   font-size: 13px;
 }
 
+.knowledge-card em {
+  color: #bcb8c2;
+  font-size: 10px;
+  font-style: normal;
+}
+
 .knowledge-card span {
   color: #dedbe0;
   font-size: 11px;
   line-height: 1.55;
 }
 
+.knowledge-card span b {
+  color: #a9a4af;
+  font-weight: 600;
+}
+
 .knowledge-card small {
   color: #898b99;
   font-size: 10px;
   line-height: 1.5;
+}
+
+.knowledge-card .source-note {
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #6f7280;
+  font-size: 9px;
 }
 
 .distance-row,

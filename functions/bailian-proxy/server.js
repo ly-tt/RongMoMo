@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { randomUUID } from 'node:crypto'
 
 const PORT = Number(process.env.FC_SERVER_PORT || process.env.PORT || 9000)
 const PATIENT_APP_ID =
@@ -10,7 +11,19 @@ const ALLOWED_ORIGIN =
 const MAX_BODY_BYTES = 24_000
 const REQUEST_TIMEOUT_MS = 10_000
 const REQUESTS_PER_MINUTE = 15
+const DEBUG_AI_OUTPUT = process.env.DEBUG_AI_OUTPUT === 'true'
 const requestBuckets = new Map()
+
+function logEvent(level, event, details = {}) {
+  const payload = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    ...details,
+  })
+  const writer = level === 'error' ? console.error : console.log
+  writer(payload)
+}
 
 function setCorsHeaders(response, origin) {
   if (origin === ALLOWED_ORIGIN) {
@@ -22,8 +35,9 @@ function setCorsHeaders(response, origin) {
   response.setHeader('Access-Control-Max-Age', '86400')
 }
 
-function sendJson(response, status, data, origin) {
+function sendJson(response, status, data, origin, requestId) {
   setCorsHeaders(response, origin)
+  if (requestId) response.setHeader('X-Request-Id', requestId)
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -116,7 +130,7 @@ function validateReport(value) {
   )
 }
 
-async function callBailian(appId, prompt, bizParams) {
+async function callBailian(appId, prompt, bizParams, context) {
   const apiKey = process.env.DASHSCOPE_API_KEY
   if (!apiKey) {
     const error = new Error('AI_NOT_CONFIGURED')
@@ -132,6 +146,7 @@ async function callBailian(appId, prompt, bizParams) {
     headers['X-DashScope-WorkSpace'] = process.env.DASHSCOPE_WORKSPACE_ID
   }
 
+  const startedAt = Date.now()
   const response = await fetch(
     `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,
     {
@@ -150,34 +165,74 @@ async function callBailian(appId, prompt, bizParams) {
   )
 
   if (!response.ok) {
+    logEvent('error', 'ai_upstream_failed', {
+      ...context,
+      upstreamStatus: response.status,
+      durationMs: Date.now() - startedAt,
+    })
     const error = new Error('AI_UPSTREAM_FAILED')
     error.status = 502
     throw error
   }
 
   const payload = await response.json()
+  const upstreamRequestId =
+    payload?.request_id || response.headers.get('x-request-id') || null
   if (typeof payload?.output?.text !== 'string') {
+    logEvent('error', 'ai_response_invalid', {
+      ...context,
+      upstreamRequestId,
+      durationMs: Date.now() - startedAt,
+      reason: 'missing_output_text',
+    })
     const error = new Error('INVALID_AI_RESPONSE')
     error.status = 502
     throw error
   }
 
   try {
-    return parseModelJson(payload.output.text)
+    const result = parseModelJson(payload.output.text)
+    logEvent('info', 'ai_completed', {
+      ...context,
+      upstreamRequestId,
+      durationMs: Date.now() - startedAt,
+      usage: payload?.usage || null,
+    })
+    if (DEBUG_AI_OUTPUT) {
+      logEvent('info', 'ai_debug_output', {
+        ...context,
+        upstreamRequestId,
+        output: result,
+      })
+    }
+    return result
   } catch {
+    logEvent('error', 'ai_response_invalid', {
+      ...context,
+      upstreamRequestId,
+      durationMs: Date.now() - startedAt,
+      reason: 'invalid_json',
+      ...(DEBUG_AI_OUTPUT
+        ? { rawOutput: payload.output.text.slice(0, 4_000) }
+        : {}),
+    })
     const error = new Error('INVALID_AI_JSON')
     error.status = 502
     throw error
   }
 }
 
-async function handlePatient(request) {
+async function handlePatient(request, requestId) {
   const body = await readJsonBody(request)
-  const patient = await callBailian(
-    PATIENT_APP_ID,
+  const patientRequest =
     typeof body.query === 'string'
       ? body.query.slice(0, 200)
-      : '请随机生成一名适合本局游戏的新患者。',
+      : '请随机生成一名适合本局游戏的新患者。'
+  const patient = await callBailian(
+    PATIENT_APP_ID,
+    `${patientRequest}\n姓名、性格和开场对白只使用简体中文。`,
+    undefined,
+    { requestId, workflow: 'patient' },
   )
 
   if (!validatePatient(patient)) {
@@ -188,7 +243,7 @@ async function handlePatient(request) {
   return patient
 }
 
-async function handleReport(request) {
+async function handleReport(request, requestId) {
   const body = await readJsonBody(request)
   const required = ['patientJson', 'stateJson', 'recordsJson']
   if (
@@ -203,12 +258,13 @@ async function handleReport(request) {
 
   const report = await callBailian(
     REPORT_APP_ID,
-    '请根据本次五针记录生成疗程报告。',
+    '请根据本次五针记录生成简短有趣的疗程报告。所有自然语言字段只使用简体中文，不要直接输出 BLOOD、BRUISE、NERVE、BONE 等英文事件名。',
     {
       patient_json: body.patientJson,
       state_json: body.stateJson,
       records_json: body.recordsJson,
     },
+    { requestId, workflow: 'report' },
   )
 
   if (!validateReport(report)) {
@@ -220,12 +276,14 @@ async function handleReport(request) {
 }
 
 const server = createServer(async (request, response) => {
+  const requestId = randomUUID()
+  const startedAt = Date.now()
   const origin = request.headers.origin || ''
   const pathname = new URL(request.url || '/', 'http://localhost').pathname
 
   if (request.method === 'OPTIONS') {
     if (origin && origin !== ALLOWED_ORIGIN) {
-      return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin)
+      return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin, requestId)
     }
     setCorsHeaders(response, origin)
     response.writeHead(204)
@@ -241,27 +299,48 @@ const server = createServer(async (request, response) => {
         aiConfigured: Boolean(process.env.DASHSCOPE_API_KEY),
       },
       origin,
+      requestId,
     )
   }
 
   if (origin && origin !== ALLOWED_ORIGIN) {
-    return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin)
+    return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin, requestId)
   }
   if (request.method !== 'POST') {
-    return sendJson(response, 405, { error: 'METHOD_NOT_ALLOWED' }, origin)
+    return sendJson(response, 405, { error: 'METHOD_NOT_ALLOWED' }, origin, requestId)
   }
   if (!allowRequest(request)) {
-    return sendJson(response, 429, { error: 'RATE_LIMITED' }, origin)
+    return sendJson(response, 429, { error: 'RATE_LIMITED' }, origin, requestId)
   }
+
+  logEvent('info', 'request_started', {
+    requestId,
+    method: request.method,
+    path: pathname,
+  })
 
   try {
     if (pathname === '/api/ai/patient') {
-      return sendJson(response, 200, await handlePatient(request), origin)
+      const result = await handlePatient(request, requestId)
+      logEvent('info', 'request_completed', {
+        requestId,
+        path: pathname,
+        status: 200,
+        durationMs: Date.now() - startedAt,
+      })
+      return sendJson(response, 200, result, origin, requestId)
     }
     if (pathname === '/api/ai/report') {
-      return sendJson(response, 200, await handleReport(request), origin)
+      const result = await handleReport(request, requestId)
+      logEvent('info', 'request_completed', {
+        requestId,
+        path: pathname,
+        status: 200,
+        durationMs: Date.now() - startedAt,
+      })
+      return sendJson(response, 200, result, origin, requestId)
     }
-    return sendJson(response, 404, { error: 'NOT_FOUND' }, origin)
+    return sendJson(response, 404, { error: 'NOT_FOUND' }, origin, requestId)
   } catch (error) {
     const status = Number(error?.status) || 500
     const safeErrors = new Set([
@@ -276,10 +355,21 @@ const server = createServer(async (request, response) => {
       'INVALID_REPORT_RESULT',
     ])
     const code = safeErrors.has(error?.message) ? error.message : 'INTERNAL_ERROR'
-    return sendJson(response, status, { error: code }, origin)
+    logEvent('error', 'request_failed', {
+      requestId,
+      path: pathname,
+      status,
+      code,
+      durationMs: Date.now() - startedAt,
+    })
+    return sendJson(response, status, { error: code, requestId }, origin, requestId)
   }
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Bailian proxy listening on port ${PORT}`)
+  logEvent('info', 'server_started', {
+    message: `Bailian proxy listening on port ${PORT}`,
+    port: PORT,
+    debugAiOutput: DEBUG_AI_OUTPUT,
+  })
 })

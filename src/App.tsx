@@ -29,7 +29,9 @@ type NeedleTarget = {
   code: string
   name: string
   surface: 'PALM' | 'BACK'
+  meridian: string
   location: string
+  quickLocation: string
   traditionalUse: string
   point: THREE.Vector3
   normal: THREE.Vector3
@@ -142,7 +144,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'LI4',
     name: '合谷',
     surface: 'BACK',
-    location: '手背，第 1、2 掌骨之间，偏第 2 掌骨中点桡侧',
+    meridian: '手阳明大肠经',
+    location: '手背，第 2 掌骨桡侧的中点处。',
+    quickLocation: '拇指、食指并拢时，虎口肌肉最高处附近；展开后对照第 2 掌骨中点桡侧。',
     traditionalUse: '传统常用于头面部、牙齿及头部不适。',
     point: new THREE.Vector3(-3.2, 12.2, 1.66),
     normal: new THREE.Vector3(0.38, 0.36, -0.85).normalize(),
@@ -151,7 +155,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'PC8',
     name: '劳宫',
     surface: 'PALM',
-    location: '掌心，第 2、3 掌骨之间，握拳时中指尖附近',
+    meridian: '手厥阴心包经',
+    location: '手掌，第 2、3 掌骨之间，掌指关节近端凹陷中。',
+    quickLocation: '自然握拳，中指尖落在掌心的位置附近。',
     traditionalUse: '传统常用于手心发热、紧张烦躁等。',
     point: new THREE.Vector3(-4.9, 13, 2.93),
     normal: new THREE.Vector3(-0.03, 0.69, 0.72).normalize(),
@@ -160,7 +166,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'HT8',
     name: '少府',
     surface: 'PALM',
-    location: '掌心，第 4、5 掌骨之间，握拳时小指尖附近',
+    meridian: '手少阴心经',
+    location: '手掌，第 4、5 掌骨之间，第 5 掌指关节近端凹陷中。',
+    quickLocation: '自然握拳，小指尖落在掌心的位置附近。',
     traditionalUse: '传统常用于心烦、手掌发热等。',
     point: new THREE.Vector3(-9.4, 13, 3.06),
     normal: new THREE.Vector3(0.26, 0.33, 0.91).normalize(),
@@ -169,7 +177,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'LU10',
     name: '鱼际',
     surface: 'PALM',
-    location: '拇指根部隆起处，第 1 掌骨中点桡侧',
+    meridian: '手太阴肺经',
+    location: '手掌，第 1 掌骨中点桡侧，赤白肉际处。',
+    quickLocation: '沿拇指根部的鱼腹状肌肉隆起，找到第 1 掌骨中点、掌背皮肤交界处。',
     traditionalUse: '传统常用于咽喉、咳嗽等相关不适。',
     point: new THREE.Vector3(-2.4, 11.5, 3.54),
     normal: new THREE.Vector3(0.58, -0.08, 0.81).normalize(),
@@ -178,7 +188,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'SI3',
     name: '后溪',
     surface: 'BACK',
-    location: '小指掌指关节后方，手掌尺侧横纹末端附近',
+    meridian: '手太阳小肠经',
+    location: '手背，第 5 掌指关节尺侧，第 5 掌骨头近端凹陷中，赤白肉际处。',
+    quickLocation: '轻握拳，在小指掌指关节后方、掌横纹靠小指侧的末端附近找凹陷。',
     traditionalUse: '传统常用于颈肩、后脑及腰背不适。',
     point: new THREE.Vector3(-11.2, 14.5, 1.18),
     normal: new THREE.Vector3(-0.69, 0.18, -0.7).normalize(),
@@ -187,7 +199,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'TE3',
     name: '中渚',
     surface: 'BACK',
-    location: '手背，第 4、5 掌骨之间，掌指关节近端',
+    meridian: '手少阳三焦经',
+    location: '手背，第 4、5 掌骨之间，第 4 掌指关节近端凹陷中。',
+    quickLocation: '从无名指与小指的指缝向手腕方向滑，在两掌骨之间先摸到的凹陷处。',
     traditionalUse: '传统常用于耳部、头部及手指不适。',
     point: new THREE.Vector3(-10, 14.2, 0.45),
     normal: new THREE.Vector3(-0.48, 0.03, -0.87).normalize(),
@@ -196,7 +210,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'TE4',
     name: '阳池',
     surface: 'BACK',
-    location: '手背腕横纹，腕关节中央略偏小指侧',
+    meridian: '手少阳三焦经',
+    location: '腕背侧横纹上，指总伸肌腱尺侧缘凹陷中。',
+    quickLocation: '手背朝上，在腕背横纹中央略偏小指侧、伸肌腱旁寻找凹陷。',
     traditionalUse: '传统常用于手腕不适。',
     point: new THREE.Vector3(-8.3, 6.8, -0.31),
     normal: new THREE.Vector3(-0.01, 0.26, -0.97).normalize(),
@@ -205,7 +221,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'HT7',
     name: '神门',
     surface: 'PALM',
-    location: '掌侧腕横纹，小指侧腕屈肌腱桡侧',
+    meridian: '手少阴心经',
+    location: '腕前内侧，腕掌侧横纹上，尺侧腕屈肌腱桡侧缘。',
+    quickLocation: '掌心朝上，在腕横纹小指侧摸到明显肌腱，取它靠拇指一侧的凹陷。',
     traditionalUse: '传统常用于失眠、紧张及心神不宁。',
     point: new THREE.Vector3(-9.5, 6.8, 3.7),
     normal: new THREE.Vector3(-0.2, -0.42, 0.88).normalize(),
@@ -214,7 +232,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'PC7',
     name: '大陵',
     surface: 'PALM',
-    location: '掌侧腕横纹中央，两条屈肌腱之间',
+    meridian: '手厥阴心包经',
+    location: '腕掌侧横纹上，掌长肌腱与桡侧腕屈肌腱之间。',
+    quickLocation: '握拳并稍屈腕，在腕横纹中央两条明显肌腱之间找点。',
     traditionalUse: '传统常用于手腕不适、紧张等。',
     point: new THREE.Vector3(-7.5, 6.8, 4.07),
     normal: new THREE.Vector3(-0.04, -0.46, 0.89).normalize(),
@@ -223,7 +243,9 @@ const ACUPOINTS: NeedleTarget[] = [
     code: 'LU9',
     name: '太渊',
     surface: 'PALM',
-    location: '掌侧腕横纹，大拇指一侧的凹陷处',
+    meridian: '手太阴肺经',
+    location: '腕前外侧，桡骨茎突与舟骨之间，拇长展肌腱尺侧凹陷中。',
+    quickLocation: '掌心朝上，在腕横纹拇指侧、能摸到桡动脉搏动附近的凹陷处辨认。',
     traditionalUse: '传统常用于呼吸系统相关不适。',
     point: new THREE.Vector3(-5.8, 7, 3.56),
     normal: new THREE.Vector3(0.45, -0.52, 0.73).normalize(),
@@ -1515,7 +1537,8 @@ function TreatmentSummaryPage({
           source: 'ai',
         })
       })
-      .catch(() => {
+      .catch((error) => {
+        console.warn('[Needle Roulette AI] report fallback', error)
         if (!cancelled) setSummary(localSummary)
       })
       .finally(() => {
@@ -1681,7 +1704,8 @@ export default function App() {
       setPatient(generatedPatient)
       setPatientSource('ai')
       resetTreatment(generatedPatient)
-    } catch {
+    } catch (error) {
+      console.warn('[Needle Roulette AI] patient fallback', error)
       // The locally generated patient is the intentional offline fallback.
     } finally {
       if (patientRequestId.current === requestId) setPatientLoading(false)
@@ -1803,9 +1827,15 @@ export default function App() {
 
       <footer className="control-panel">
         <div className="target-copy">
-          <p className="label">{activeTarget.surface === 'PALM' ? '手心穴位' : '手背穴位'}</p>
-          <h2>{activeTarget.location}</h2>
-          <p>{hit ? `落点：${hit.label}` : '每局随机抽取五个真实穴位，旋转观察后轻触下针。'}</p>
+          <p className="label">
+            {activeTarget.surface === 'PALM' ? '手心穴位' : '手背穴位'} · {activeTarget.meridian}
+          </p>
+          <h2>{activeTarget.code} · {activeTarget.name}</h2>
+          <p>
+            {hit
+              ? `落点：${hit.label}`
+              : `快速找：${activeTarget.quickLocation}`}
+          </p>
         </div>
         <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
           {Array.from({ length: MAX_NEEDLES }, (_, index) => (
@@ -1836,8 +1866,13 @@ export default function App() {
             <p>{feedback.message}</p>
             <div className="knowledge-card">
               <strong>{activeTarget.code} · {activeTarget.name}</strong>
-              <span>{activeTarget.location}</span>
+              <em>{activeTarget.meridian}</em>
+              <span><b>标准位置：</b>{activeTarget.location}</span>
+              <span><b>快速找法：</b>{activeTarget.quickLocation}</span>
               <small>{activeTarget.traditionalUse}</small>
+              <small className="source-note">
+                定位参考 GB/T 12346-2021 与 WHO 标准 · 仅供游戏科普，不作为针刺指导
+              </small>
             </div>
             <div className="event-zone-row">
               <span>触发区域</span>

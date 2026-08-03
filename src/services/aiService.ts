@@ -74,7 +74,16 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
       body: JSON.stringify(body),
       signal: controller.signal,
     })
-    if (!response.ok) throw new Error(`AI request failed: ${response.status}`)
+    const requestId = response.headers.get('x-request-id') || 'unknown'
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      const serverCode =
+        payload && typeof payload.error === 'string' ? payload.error : 'UNKNOWN'
+      throw new Error(
+        `AI request failed: path=${path} status=${response.status} code=${serverCode} requestId=${requestId}`,
+      )
+    }
+    console.info(`[Needle Roulette AI] ${path} completed requestId=${requestId}`)
     return await response.json()
   } finally {
     window.clearTimeout(timer)

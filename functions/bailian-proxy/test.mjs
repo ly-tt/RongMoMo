@@ -48,7 +48,10 @@ try {
     body: JSON.stringify({ query: '生成患者' }),
   })
   assert.equal(patient.status, 503)
-  assert.deepEqual(await patient.json(), { error: 'AI_NOT_CONFIGURED' })
+  assert.equal(patient.headers.get('x-request-id')?.length > 0, true)
+  const patientError = await patient.json()
+  assert.equal(patientError.error, 'AI_NOT_CONFIGURED')
+  assert.equal(typeof patientError.requestId, 'string')
 
   console.log('Bailian proxy tests passed')
 } finally {
