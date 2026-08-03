@@ -2,6 +2,11 @@ import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
 import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
+import {
+  requestAiPatient,
+  requestAiTreatmentReport,
+  type AiPatient,
+} from './services/aiService'
 
 type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
@@ -42,7 +47,7 @@ type PointerStart = {
   y: number
 }
 
-type PatientState = {
+export type PatientState = {
   pain: number
   bruise: number
   bleeding: number
@@ -70,6 +75,8 @@ type TreatmentSummary = {
   title: string
   review: string
   dialog: string
+  source: 'ai' | 'local'
+  shareText?: string
 }
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
@@ -245,8 +252,6 @@ function clampState(value: number) {
   return Math.round(THREE.MathUtils.clamp(value, 0, 100))
 }
 
-// AI integration seam: Coze Workflow can replace this generator while keeping
-// the same PatientProfile contract and the rest of the game unchanged.
 export function createLocalPatient(): PatientProfile {
   const archetype = PATIENT_ARCHETYPES[Math.floor(Math.random() * PATIENT_ARCHETYPES.length)]
   return {
@@ -255,6 +260,24 @@ export function createLocalPatient(): PatientProfile {
     age: Math.floor(20 + Math.random() * 35),
     painTolerance: Math.floor(28 + Math.random() * 62),
     vascularDifficulty: Math.floor(25 + Math.random() * 66),
+  }
+}
+
+function createPatientFromAi(patient: AiPatient): PatientProfile {
+  const openingLine = patient.openingDialog.trim().replace(/^["“”]+|["“”]+$/g, '')
+  return {
+    id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: patient.name.trim().slice(0, 12),
+    age: clampState(patient.age),
+    painTolerance: clampState(patient.painTolerance),
+    vascularDifficulty: clampState(patient.vascularDifficulty),
+    personality: patient.personality.trim().slice(0, 24),
+    openingLine: `“${openingLine.slice(0, 48)}”`,
+    trustSensitivity: THREE.MathUtils.clamp(
+      0.78 + (100 - patient.painTolerance) * 0.0045,
+      0.78,
+      1.23,
+    ),
   }
 }
 
@@ -295,8 +318,6 @@ function applyNeedleResult(
   }
 }
 
-// AI integration seam: Coze/Bailian can replace this text generator later.
-// The score and accumulated state remain deterministic game logic.
 export function createLocalTreatmentSummary(
   patientState: PatientState,
   hits: Hit[],
@@ -323,6 +344,7 @@ export function createLocalTreatmentSummary(
       title: '稳准轻，患者很买账',
       review: `${successCount} 针命中穴位，整段疗程节奏稳定，几乎没有让患者产生警惕。`,
       dialog: `${patient.name}：“原来针灸也可以这么轻松，下次还找你。”`,
+      source: 'local',
     }
   }
   if (satisfaction >= 70) {
@@ -334,6 +356,7 @@ export function createLocalTreatmentSummary(
         ? `出现了 ${bloodCount} 次出血事件，但整体状态尚可，患者决定先观察你的后续表现。`
         : '偶有偏差，好在反应及时，患者的信任还没有掉出安全线。',
       dialog: `${patient.name}：“还行，不过下一针能不能再轻一点？”`,
+      source: 'local',
     }
   }
   if (satisfaction >= 50) {
@@ -345,6 +368,7 @@ export function createLocalTreatmentSummary(
         ? `神经刺激出现 ${nerveCount} 次，麻木和疼痛累积明显，精准度仍需提升。`
         : '偏针事件较多，患者全程盯着你的手，信任值勉强保住。',
       dialog: `${patient.name}：“我相信你……但我的手好像有自己的意见。”`,
+      source: 'local',
     }
   }
   return {
@@ -356,6 +380,7 @@ export function createLocalTreatmentSummary(
         ? `硬组织刺激出现 ${boneCount} 次，疼痛和信任损失成为本次疗程的主要问题。`
         : '多项状态已经进入高压区，这一局的首要任务不是追求得气，而是重新找准位置。',
     dialog: `${patient.name}：“下次见面……我们还是先握个手吧。”`,
+    source: 'local',
   }
 }
 
@@ -1325,10 +1350,14 @@ function Scene({
 
 function HomePage({
   patient,
+  patientSource,
+  patientLoading,
   onRegenerate,
   onStart,
 }: {
   patient: PatientProfile
+  patientSource: 'ai' | 'local'
+  patientLoading: boolean
   onRegenerate: () => void
   onStart: () => void
 }) {
@@ -1354,7 +1383,9 @@ function HomePage({
             <h2>{patient.name} <small>{patient.age} 岁</small></h2>
             <span>{patient.personality}</span>
           </div>
-          <button type="button" onClick={onRegenerate}>换一位</button>
+          <button type="button" onClick={onRegenerate} disabled={patientLoading}>
+            {patientLoading ? 'AI 生成中' : '换一位'}
+          </button>
         </div>
 
         <blockquote>{patient.openingLine}</blockquote>
@@ -1379,7 +1410,8 @@ function HomePage({
       </button>
 
       <p className="home-disclaimer">
-        患者由本地游戏引擎生成，AI 接口已预留。本作品不是医学训练软件。
+        {patientSource === 'ai' ? '患者由阿里云百炼生成。' : '当前使用本地患者，百炼不可用时游戏仍可继续。'}
+        本作品不是医学训练软件。
       </p>
     </main>
   )
@@ -1426,10 +1458,58 @@ function TreatmentSummaryPage({
   targets: NeedleTarget[]
   onRestart: () => void
 }) {
-  const summary = useMemo(
+  const localSummary = useMemo(
     () => createLocalTreatmentSummary(patientState, hits, patient),
     [patientState, hits, patient],
   )
+  const [summary, setSummary] = useState<TreatmentSummary>(localSummary)
+  const [isAiLoading, setIsAiLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    const records = hits.map((item, index) => ({
+      index: item.needleNumber,
+      acupoint: targets[index] ? `${targets[index].code} ${targets[index].name}` : item.label,
+      result: item.result,
+      distance: Number(item.distance.toFixed(1)),
+      correctSurface: item.correctSurface,
+    }))
+
+    requestAiTreatmentReport({
+      patientJson: JSON.stringify({
+        name: patient.name,
+        age: patient.age,
+        painTolerance: patient.painTolerance,
+        vascularDifficulty: patient.vascularDifficulty,
+        personality: patient.personality,
+      }),
+      stateJson: JSON.stringify(patientState),
+      recordsJson: JSON.stringify(records),
+    })
+      .then((aiReport) => {
+        if (cancelled) return
+        const patientDialog = aiReport.patientDialog
+          .trim()
+          .replace(/^["“”]+|["“”]+$/g, '')
+        setSummary({
+          ...localSummary,
+          review: aiReport.comment,
+          dialog: `${patient.name}：“${patientDialog}”`,
+          shareText: aiReport.shareText,
+          source: 'ai',
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setSummary(localSummary)
+      })
+      .finally(() => {
+        if (!cancelled) setIsAiLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [hits, localSummary, patient, patientState, targets])
 
   return (
     <main className="summary-shell">
@@ -1452,7 +1532,9 @@ function TreatmentSummaryPage({
               <span key={index} className={index < summary.rating ? 'active' : ''}>★</span>
             ))}
           </div>
-          <small>本地疗程引擎生成</small>
+          <small>
+            {isAiLoading ? '百炼正在生成评价…' : summary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
+          </small>
         </div>
       </section>
 
@@ -1493,7 +1575,8 @@ function TreatmentSummaryPage({
         接诊下一位患者
       </button>
       <p className="summary-disclaimer">
-        当前对白由本地规则生成，扣子/百炼接口将在下一阶段接入。内容仅作游戏科普。
+        {summary.source === 'ai' ? '本次趣味对白由阿里云百炼生成。' : 'AI 暂不可用，已自动切换到本地总结。'}
+        内容仅作游戏科普，不构成医学建议。
       </p>
     </main>
   )
@@ -1501,6 +1584,8 @@ function TreatmentSummaryPage({
 
 export default function App() {
   const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
+  const [patientSource, setPatientSource] = useState<'ai' | 'local'>('local')
+  const [patientLoading, setPatientLoading] = useState(true)
   const [started, setStarted] = useState(false)
   const [hit, setHit] = useState<Hit | null>(null)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
@@ -1513,6 +1598,8 @@ export default function App() {
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
   )
+  const patientRequestId = useRef(0)
+  const startedRef = useRef(false)
 
   const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
     if (hit || needleCount >= MAX_NEEDLES) return
@@ -1563,23 +1650,47 @@ export default function App() {
     setSessionTargets(createTreatmentPlan())
   }
 
-  const regeneratePatient = () => {
-    const nextPatient = createLocalPatient()
-    setPatient(nextPatient)
-    resetTreatment(nextPatient)
+  const regeneratePatient = async () => {
+    const requestId = patientRequestId.current + 1
+    patientRequestId.current = requestId
+    const fallbackPatient = createLocalPatient()
+    setPatient(fallbackPatient)
+    setPatientSource('local')
+    setPatientLoading(true)
+    resetTreatment(fallbackPatient)
+
+    try {
+      const generatedPatient = createPatientFromAi(await requestAiPatient())
+      if (patientRequestId.current !== requestId || startedRef.current) return
+      setPatient(generatedPatient)
+      setPatientSource('ai')
+      resetTreatment(generatedPatient)
+    } catch {
+      // The locally generated patient is the intentional offline fallback.
+    } finally {
+      if (patientRequestId.current === requestId) setPatientLoading(false)
+    }
   }
 
   const startTreatment = () => {
+    startedRef.current = true
+    patientRequestId.current += 1
+    setPatientLoading(false)
     resetTreatment(patient)
     setStarted(true)
   }
 
   const restartTreatment = () => {
-    const nextPatient = createLocalPatient()
-    setPatient(nextPatient)
-    resetTreatment(nextPatient)
+    startedRef.current = false
     setStarted(false)
+    void regeneratePatient()
   }
+
+  useEffect(() => {
+    void regeneratePatient()
+    // Generate once on mount; later requests are user initiated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const feedback = hit ? RESULT_COPY[hit.result] : null
   const activeDelta = hit ? getPatientImpact(hit.result, patient) : null
@@ -1594,6 +1705,8 @@ export default function App() {
     return (
       <HomePage
         patient={patient}
+        patientSource={patientSource}
+        patientLoading={patientLoading}
         onRegenerate={regeneratePatient}
         onStart={startTreatment}
       />
