@@ -1304,16 +1304,32 @@ function Scene({
     <>
       <color attach="background" args={['#080a12']} />
       <fog attach="fog" args={['#080a12', 7, 13]} />
-      <ambientLight intensity={0.8} />
+      <ambientLight intensity={0.42} />
+      <hemisphereLight
+        color="#fff2e8"
+        groundColor="#292b4a"
+        intensity={1.35}
+      />
       <directionalLight
-        position={[3, 5, 4]}
-        intensity={3.3}
+        position={[3.5, 5, 4.5]}
+        intensity={2.8}
         color="#fff1df"
         castShadow
         shadow-mapSize={[1024, 1024]}
+        shadow-normalBias={0.035}
       />
-      <pointLight position={[-4, 1, 2]} color="#5b6dff" intensity={18} distance={8} />
-      <pointLight position={[3.2, -0.6, 2.6]} color="#ff7398" intensity={13} distance={7} />
+      <directionalLight
+        position={[-3.5, 3.2, -4.8]}
+        intensity={2.45}
+        color="#ffd6c7"
+      />
+      <directionalLight
+        position={[3, -2.4, -3.8]}
+        intensity={1.45}
+        color="#8ba5ff"
+      />
+      <pointLight position={[-4, 1, 2]} color="#7181ff" intensity={12} distance={8} />
+      <pointLight position={[3.2, -0.6, 2.6]} color="#ff8aa5" intensity={10} distance={7} />
       <Suspense fallback={null}>
         <RealisticHand
           onHit={onHit}
