@@ -1,4 +1,4 @@
-import { Canvas, ThreeEvent, useFrame, useThree } from '@react-three/fiber'
+import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
 import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -82,24 +82,9 @@ type TreatmentSummary = {
 }
 
 type AiContentStatus = 'idle' | 'loading' | 'success' | 'fallback'
-type CalibrationStatus = 'UNREVIEWED' | 'NEEDS_ADJUSTMENT' | 'APPROVED'
-
-type CalibrationPoint = NeedleTarget & {
-  hitRadius: number
-  status: CalibrationStatus
-  note: string
-}
-
-type CalibrationPlacement = {
-  point: THREE.Vector3
-  normal: THREE.Vector3
-  detectedSurface: 'PALM' | 'BACK' | 'SIDE'
-  region: string
-}
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 const MAX_NEEDLES = 5
-const CALIBRATION_STORAGE_KEY = 'needle-roulette-acupoint-calibration-v1'
 const INITIAL_PATIENT_STATE: PatientState = {
   pain: 8,
   bruise: 0,
@@ -156,6 +141,15 @@ const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
   BONE: { pain: 28, bruise: 5, bleeding: 0, numb: 3, trust: -22 },
 }
 
+/**
+ * 手部穴位坐标维护记录
+ *
+ * - 定位文字依据项目资料中的 GB/T 12346—2021 整理。
+ * - point / normal 使用 hand.glb 的模型局部坐标，且位于 PALM_PIVOT 偏移之前。
+ * - point 决定绿色标记和命中中心；normal 决定标记朝向与正反面检测。
+ * - 掌侧法线主要朝 +Z，背侧法线主要朝 -Z；侧面点击不会判定为命中。
+ * - 后续校准直接修改下列 point / normal，并通过 Git diff 留下逐点记录。
+ */
 const ACUPOINTS: NeedleTarget[] = [
   {
     code: 'LI4',
@@ -239,7 +233,7 @@ const ACUPOINTS: NeedleTarget[] = [
     name: '神门',
     surface: 'PALM',
     meridian: '手少阴心经',
-    location: '腕前内侧，腕掌侧横纹上，尺侧腕屈肌腱桡侧缘。',
+    location: '腕前内侧，腕掌侧远端横纹尺侧端，尺侧腕屈肌腱桡侧缘，豌豆骨上缘桡侧凹陷中。',
     quickLocation: '掌心朝上，在腕横纹小指侧摸到明显肌腱，取它靠拇指一侧的凹陷。',
     traditionalUse: '传统常用于失眠、紧张及心神不宁。',
     point: new THREE.Vector3(-9.5, 6.8, 3.7),
@@ -250,7 +244,7 @@ const ACUPOINTS: NeedleTarget[] = [
     name: '大陵',
     surface: 'PALM',
     meridian: '手厥阴心包经',
-    location: '腕掌侧横纹上，掌长肌腱与桡侧腕屈肌腱之间。',
+    location: '腕前侧，腕掌侧远端横纹中，掌长肌腱与桡侧腕屈肌腱之间。',
     quickLocation: '握拳并稍屈腕，在腕横纹中央两条明显肌腱之间找点。',
     traditionalUse: '传统常用于手腕不适、紧张等。',
     point: new THREE.Vector3(-7.5, 6.8, 4.07),
@@ -261,105 +255,13 @@ const ACUPOINTS: NeedleTarget[] = [
     name: '太渊',
     surface: 'PALM',
     meridian: '手太阴肺经',
-    location: '腕前外侧，桡骨茎突与舟骨之间，拇长展肌腱尺侧凹陷中。',
+    location: '腕前外侧，桡骨茎突与腕舟状骨之间，拇长展肌腱尺侧凹陷中，腕掌侧远端横纹桡侧。',
     quickLocation: '掌心朝上，在腕横纹拇指侧、能摸到桡动脉搏动附近的凹陷处辨认。',
     traditionalUse: '传统常用于呼吸系统相关不适。',
     point: new THREE.Vector3(-5.8, 7, 3.56),
     normal: new THREE.Vector3(0.45, -0.52, 0.73).normalize(),
   },
 ]
-
-function createDefaultCalibrationPoints(): CalibrationPoint[] {
-  return ACUPOINTS.map((target) => ({
-    ...target,
-    point: target.point.clone(),
-    normal: target.normal.clone(),
-    hitRadius: 0.56,
-    status: 'UNREVIEWED',
-    note: '',
-  }))
-}
-
-function loadCalibrationPoints(): CalibrationPoint[] {
-  const defaults = createDefaultCalibrationPoints()
-  try {
-    const raw = window.localStorage.getItem(CALIBRATION_STORAGE_KEY)
-    if (!raw) return defaults
-    const saved = JSON.parse(raw) as {
-      points?: Array<{
-        code?: string
-        point?: number[]
-        normal?: number[]
-        hitRadius?: number
-        status?: CalibrationStatus
-        note?: string
-      }>
-    }
-    if (!Array.isArray(saved.points)) return defaults
-
-    return defaults.map((target) => {
-      const stored = saved.points?.find((candidate) => candidate.code === target.code)
-      if (
-        !stored ||
-        !Array.isArray(stored.point) ||
-        stored.point.length !== 3 ||
-        !Array.isArray(stored.normal) ||
-        stored.normal.length !== 3
-      ) {
-        return target
-      }
-      return {
-        ...target,
-        point: new THREE.Vector3(...(stored.point as [number, number, number])),
-        normal: new THREE.Vector3(...(stored.normal as [number, number, number])).normalize(),
-        hitRadius: THREE.MathUtils.clamp(Number(stored.hitRadius) || 0.56, 0.25, 1.1),
-        status: ['UNREVIEWED', 'NEEDS_ADJUSTMENT', 'APPROVED'].includes(
-          stored.status ?? '',
-        )
-          ? stored.status as CalibrationStatus
-          : 'UNREVIEWED',
-        note: typeof stored.note === 'string' ? stored.note.slice(0, 500) : '',
-      }
-    })
-  } catch {
-    return defaults
-  }
-}
-
-function loadCalibrationReviewer() {
-  try {
-    const raw = window.localStorage.getItem(CALIBRATION_STORAGE_KEY)
-    if (!raw) return ''
-    const saved = JSON.parse(raw) as { reviewer?: unknown }
-    return typeof saved.reviewer === 'string' ? saved.reviewer.slice(0, 40) : ''
-  } catch {
-    return ''
-  }
-}
-
-function serializeCalibration(
-  points: CalibrationPoint[],
-  reviewer: string,
-) {
-  return {
-    schemaVersion: 1,
-    model: 'hand-topology-study',
-    reviewer: reviewer.trim(),
-    reviewedAt: new Date().toISOString(),
-    coordinateSpace: 'hand.glb local coordinates before PALM_PIVOT offset',
-    points: points.map((target) => ({
-      code: target.code,
-      name: target.name,
-      meridian: target.meridian,
-      surface: target.surface,
-      point: target.point.toArray().map((value) => Number(value.toFixed(4))),
-      normal: target.normal.toArray().map((value) => Number(value.toFixed(4))),
-      hitRadius: Number(target.hitRadius.toFixed(2)),
-      status: target.status,
-      note: target.note.trim(),
-    })),
-  }
-}
 
 function shuffled<T>(items: T[]) {
   const result = [...items]
@@ -1416,532 +1318,6 @@ function RealisticHand({
   )
 }
 
-function CalibrationMarker({ target }: { target: CalibrationPoint }) {
-  const markerPosition = useMemo(
-    () => target.point.clone().addScaledVector(target.normal, 0.08).sub(PALM_PIVOT),
-    [target],
-  )
-  const markerRotation = useMemo(
-    () =>
-      new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        target.normal,
-      ),
-    [target],
-  )
-  const arrow = useMemo(
-    () =>
-      new THREE.ArrowHelper(
-        new THREE.Vector3(0, 0, 1),
-        new THREE.Vector3(0, 0, 0.02),
-        1.45,
-        0xffd36a,
-        0.3,
-        0.16,
-      ),
-    [],
-  )
-
-  return (
-    <group position={markerPosition} quaternion={markerRotation}>
-      <mesh>
-        <ringGeometry args={[target.hitRadius * 0.72, target.hitRadius, 56]} />
-        <meshBasicMaterial
-          color={target.status === 'APPROVED' ? '#67edb0' : '#ffd36a'}
-          transparent
-          opacity={0.92}
-          depthTest
-          polygonOffset
-          polygonOffsetFactor={-5}
-          polygonOffsetUnits={-5}
-          toneMapped={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-      <mesh>
-        <circleGeometry args={[0.13, 32]} />
-        <meshBasicMaterial color="#ffffff" toneMapped={false} />
-      </mesh>
-      <primitive object={arrow} />
-    </group>
-  )
-}
-
-function CalibrationHand({
-  target,
-  onPlacement,
-}: {
-  target: CalibrationPoint
-  onPlacement: (placement: CalibrationPlacement) => void
-}) {
-  const { scene } = useGLTF('/models/hand.glb', false)
-  const pointerStart = useRef<PointerStart | null>(null)
-  const { hand } = useMemo(() => {
-    const preparedHand = scene.clone(true)
-    const skinMaterial = new THREE.MeshPhysicalMaterial({
-      color: '#f2aa8f',
-      roughness: 0.72,
-      metalness: 0,
-      clearcoat: 0.12,
-      clearcoatRoughness: 0.76,
-      sheen: 0.26,
-      sheenColor: new THREE.Color('#ffb0a5'),
-      emissive: new THREE.Color('#421418'),
-      emissiveIntensity: 0.02,
-    })
-
-    preparedHand.updateMatrixWorld(true)
-    preparedHand.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return
-      keepLeftHand(object)
-      object.visible = true
-      object.castShadow = true
-      object.receiveShadow = true
-      object.material = skinMaterial
-    })
-    preparedHand.updateMatrixWorld(true)
-    preparedHand.position.sub(PALM_PIVOT)
-    preparedHand.updateMatrixWorld(true)
-    return { hand: preparedHand }
-  }, [scene])
-
-  const rememberPointer = (event: ThreeEvent<PointerEvent>) => {
-    pointerStart.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-    }
-  }
-
-  const placeMarker = (event: ThreeEvent<PointerEvent>) => {
-    event.stopPropagation()
-    const start = pointerStart.current
-    pointerStart.current = null
-    if (
-      !start ||
-      start.pointerId !== event.pointerId ||
-      Math.hypot(event.clientX - start.x, event.clientY - start.y) > 9
-    ) {
-      return
-    }
-
-    const sourcePoint = hand.worldToLocal(event.point.clone())
-    const worldNormal = event.face
-      ? event.face.normal
-          .clone()
-          .applyMatrix3(new THREE.Matrix3().getNormalMatrix(event.object.matrixWorld))
-          .normalize()
-      : new THREE.Vector3(0, 0, 1)
-    const palmAxis = new THREE.Vector3(0, 0, 1).transformDirection(hand.matrixWorld)
-    const palmFacing = worldNormal.dot(palmAxis)
-    const detectedSurface =
-      palmFacing > 0.45 ? 'PALM' : palmFacing < -0.45 ? 'BACK' : 'SIDE'
-    const localNormal = worldNormal
-      .clone()
-      .transformDirection(hand.matrixWorld.clone().invert())
-      .normalize()
-
-    onPlacement({
-      point: sourcePoint,
-      normal: localNormal,
-      detectedSurface,
-      region: classifyHandRegion(sourcePoint),
-    })
-  }
-
-  return (
-    <group
-      rotation={[-0.12, 0.08, -0.08]}
-      scale={0.135}
-      onPointerDown={rememberPointer}
-      onPointerUp={placeMarker}
-      onPointerCancel={() => {
-        pointerStart.current = null
-      }}
-    >
-      <primitive object={hand} />
-      <CalibrationMarker target={target} />
-    </group>
-  )
-}
-
-function CalibrationCameraRig({
-  view,
-}: {
-  view: { name: 'PALM' | 'BACK' | 'THUMB' | 'PINKY'; nonce: number }
-}) {
-  const { camera } = useThree()
-
-  useEffect(() => {
-    const positions: Record<typeof view.name, [number, number, number]> = {
-      PALM: [0, 0.15, 6.1],
-      BACK: [0, 0.15, -6.1],
-      THUMB: [6.1, 0.15, 0],
-      PINKY: [-6.1, 0.15, 0],
-    }
-    camera.position.set(...positions[view.name])
-    camera.up.set(0, 1, 0)
-    camera.lookAt(0, 0, 0)
-    camera.updateProjectionMatrix()
-  }, [camera, view])
-
-  return null
-}
-
-function CalibrationScene({
-  target,
-  view,
-  onPlacement,
-}: {
-  target: CalibrationPoint
-  view: { name: 'PALM' | 'BACK' | 'THUMB' | 'PINKY'; nonce: number }
-  onPlacement: (placement: CalibrationPlacement) => void
-}) {
-  return (
-    <>
-      <color attach="background" args={['#080a12']} />
-      <fog attach="fog" args={['#080a12', 7, 13]} />
-      <ambientLight intensity={0.46} />
-      <hemisphereLight color="#fff2e8" groundColor="#292b4a" intensity={1.45} />
-      <directionalLight position={[3.5, 5, 4.5]} intensity={2.8} color="#fff1df" />
-      <directionalLight position={[-3.5, 3.2, -4.8]} intensity={2.45} color="#ffd6c7" />
-      <directionalLight position={[3, -2.4, -3.8]} intensity={1.45} color="#8ba5ff" />
-      <pointLight position={[-4, 1, 2]} color="#7181ff" intensity={12} distance={8} />
-      <Suspense fallback={null}>
-        <CalibrationHand target={target} onPlacement={onPlacement} />
-      </Suspense>
-      <ContactShadows position={[0, -2.05, 0]} opacity={0.4} scale={7} blur={2.8} far={5} />
-      <CalibrationCameraRig view={view} />
-      <OrbitControls
-        makeDefault
-        target={[0, 0, 0]}
-        enablePan={false}
-        minDistance={4}
-        maxDistance={8}
-        rotateSpeed={0.65}
-        zoomSpeed={0.75}
-        touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE }}
-      />
-    </>
-  )
-}
-
-function CalibrationPage() {
-  const [points, setPoints] = useState<CalibrationPoint[]>(loadCalibrationPoints)
-  const [selectedCode, setSelectedCode] = useState(ACUPOINTS[0].code)
-  const [reviewer, setReviewer] = useState(loadCalibrationReviewer)
-  const [view, setView] = useState<{
-    name: 'PALM' | 'BACK' | 'THUMB' | 'PINKY'
-    nonce: number
-  }>({ name: 'PALM', nonce: 0 })
-  const [lastPlacement, setLastPlacement] = useState<CalibrationPoint | null>(null)
-  const [placementInfo, setPlacementInfo] = useState('点击手部表面可移动当前穴位')
-  const [copyState, setCopyState] = useState('复制 JSON')
-  const activeTarget =
-    points.find((target) => target.code === selectedCode) ?? points[0]
-  const approvedCount = points.filter((target) => target.status === 'APPROVED').length
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      CALIBRATION_STORAGE_KEY,
-      JSON.stringify(serializeCalibration(points, reviewer)),
-    )
-  }, [points, reviewer])
-
-  const updateActiveTarget = (
-    updater: (target: CalibrationPoint) => CalibrationPoint,
-  ) => {
-    setPoints((current) =>
-      current.map((target) =>
-        target.code === selectedCode ? updater(target) : target,
-      ),
-    )
-  }
-
-  const handlePlacement = (placement: CalibrationPlacement) => {
-    setLastPlacement({
-      ...activeTarget,
-      point: activeTarget.point.clone(),
-      normal: activeTarget.normal.clone(),
-    })
-    updateActiveTarget((target) => ({
-      ...target,
-      point: placement.point.clone(),
-      normal: placement.normal.clone(),
-      status: 'NEEDS_ADJUSTMENT',
-    }))
-    const surfaceLabel = {
-      PALM: '手心',
-      BACK: '手背',
-      SIDE: '手侧',
-    }[placement.detectedSurface]
-    setPlacementInfo(
-      placement.detectedSurface === 'SIDE'
-        ? `已放在${surfaceLabel} · ${placement.region}，游戏会判为侧扎，请继续调整`
-        : `已放在${surfaceLabel} · ${placement.region}，请从侧面复核是否穿模`,
-    )
-  }
-
-  const chooseView = (name: typeof view.name) => {
-    setView((current) => ({ name, nonce: current.nonce + 1 }))
-  }
-
-  const undoPlacement = () => {
-    if (!lastPlacement || lastPlacement.code !== selectedCode) return
-    updateActiveTarget(() => ({
-      ...lastPlacement,
-      point: lastPlacement.point.clone(),
-      normal: lastPlacement.normal.clone(),
-    }))
-    setLastPlacement(null)
-    setPlacementInfo('已撤销上一次位置调整')
-  }
-
-  const resetCurrent = () => {
-    const original = createDefaultCalibrationPoints().find(
-      (target) => target.code === selectedCode,
-    )
-    if (!original) return
-    setLastPlacement({
-      ...activeTarget,
-      point: activeTarget.point.clone(),
-      normal: activeTarget.normal.clone(),
-    })
-    updateActiveTarget(() => original)
-    setPlacementInfo('已恢复项目中的原始坐标')
-  }
-
-  const exportJson = () => {
-    const payload = JSON.stringify(serializeCalibration(points, reviewer), null, 2)
-    const url = URL.createObjectURL(
-      new Blob([payload], { type: 'application/json;charset=utf-8' }),
-    )
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `needle-acupoints-${new Date().toISOString().slice(0, 10)}.json`
-    anchor.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const copyJson = async () => {
-    try {
-      await navigator.clipboard.writeText(
-        JSON.stringify(serializeCalibration(points, reviewer), null, 2),
-      )
-      setCopyState('已复制')
-    } catch {
-      setCopyState('复制失败')
-    }
-    window.setTimeout(() => setCopyState('复制 JSON'), 1400)
-  }
-
-  return (
-    <main className="calibration-shell">
-      <header className="calibration-header">
-        <div>
-          <p className="eyebrow">EXPERT CALIBRATION MODE</p>
-          <h1>穴位校准台</h1>
-          <span>数据自动保存在当前浏览器，不会直接修改正式游戏坐标。</span>
-        </div>
-        <div className="calibration-progress">
-          <strong>{approvedCount} / {points.length}</strong>
-          <span>已审核</span>
-          <a href="/">返回游戏</a>
-        </div>
-      </header>
-
-      <section className="calibration-workspace">
-        <aside className="calibration-list" aria-label="待校准穴位">
-          <div className="calibration-list-heading">
-            <strong>穴位列表</strong>
-            <span>逐点复核</span>
-          </div>
-          {points.map((target) => (
-            <button
-              key={target.code}
-              type="button"
-              className={target.code === selectedCode ? 'active' : ''}
-              onClick={() => {
-                setSelectedCode(target.code)
-                setLastPlacement(null)
-                setPlacementInfo('点击手部表面可移动当前穴位')
-                chooseView(target.surface)
-              }}
-            >
-              <i className={target.status.toLowerCase()} />
-              <span>
-                <strong>{target.code} · {target.name}</strong>
-                <small>{target.meridian}</small>
-              </span>
-              <em>{target.surface === 'PALM' ? '掌' : '背'}</em>
-            </button>
-          ))}
-        </aside>
-
-        <section className="calibration-stage">
-          <div className="calibration-stage-toolbar">
-            <span>{activeTarget.code} · {activeTarget.name}</span>
-            <div>
-              {([
-                ['PALM', '掌心'],
-                ['BACK', '手背'],
-                ['THUMB', '拇指侧'],
-                ['PINKY', '小指侧'],
-              ] as const).map(([name, label]) => (
-                <button
-                  key={name}
-                  type="button"
-                  className={view.name === name ? 'active' : ''}
-                  onClick={() => chooseView(name)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="calibration-canvas">
-            <Canvas
-              camera={{ position: [0, 0.15, 6.1], fov: 38 }}
-              dpr={[1, 1.6]}
-              gl={{ antialias: true, powerPreference: 'high-performance' }}
-            >
-              <CalibrationScene
-                target={activeTarget}
-                view={view}
-                onPlacement={handlePlacement}
-              />
-            </Canvas>
-            <div className="calibration-placement-info">{placementInfo}</div>
-          </div>
-        </section>
-
-        <aside className="calibration-inspector">
-          <section>
-            <p>当前穴位</p>
-            <h2>{activeTarget.code} · {activeTarget.name}</h2>
-            <span className="meridian-chip">{activeTarget.meridian}</span>
-          </section>
-
-          <dl className="calibration-reference">
-            <div>
-              <dt>国家标准位置</dt>
-              <dd>{activeTarget.location}</dd>
-            </div>
-            <div>
-              <dt>快速找法</dt>
-              <dd>{activeTarget.quickLocation}</dd>
-            </div>
-          </dl>
-
-          <label>
-            目标表面
-            <select
-              value={activeTarget.surface}
-              onChange={(event) =>
-                updateActiveTarget((target) => ({
-                  ...target,
-                  surface: event.target.value as 'PALM' | 'BACK',
-                  status: 'NEEDS_ADJUSTMENT',
-                }))
-              }
-            >
-              <option value="PALM">手心</option>
-              <option value="BACK">手背</option>
-            </select>
-          </label>
-
-          <label>
-            有效命中半径
-            <div className="radius-control">
-              <input
-                type="range"
-                min="0.25"
-                max="1.1"
-                step="0.05"
-                value={activeTarget.hitRadius}
-                onChange={(event) =>
-                  updateActiveTarget((target) => ({
-                    ...target,
-                    hitRadius: Number(event.target.value),
-                    status: 'NEEDS_ADJUSTMENT',
-                  }))
-                }
-              />
-              <output>{activeTarget.hitRadius.toFixed(2)}</output>
-            </div>
-          </label>
-
-          <label>
-            审核状态
-            <select
-              value={activeTarget.status}
-              onChange={(event) =>
-                updateActiveTarget((target) => ({
-                  ...target,
-                  status: event.target.value as CalibrationStatus,
-                }))
-              }
-            >
-              <option value="UNREVIEWED">未审核</option>
-              <option value="NEEDS_ADJUSTMENT">需要调整</option>
-              <option value="APPROVED">已确认</option>
-            </select>
-          </label>
-
-          <label>
-            审核备注
-            <textarea
-              value={activeTarget.note}
-              maxLength={500}
-              placeholder="例如：沿第 2 掌骨向近端移动一点"
-              onChange={(event) =>
-                updateActiveTarget((target) => ({
-                  ...target,
-                  note: event.target.value,
-                }))
-              }
-            />
-          </label>
-
-          <div className="coordinate-readout">
-            <span>POINT</span>
-            <code>{activeTarget.point.toArray().map((value) => value.toFixed(3)).join(', ')}</code>
-            <span>NORMAL</span>
-            <code>{activeTarget.normal.toArray().map((value) => value.toFixed(3)).join(', ')}</code>
-          </div>
-
-          <div className="calibration-edit-actions">
-            <button type="button" onClick={undoPlacement} disabled={!lastPlacement}>
-              撤销位置
-            </button>
-            <button type="button" onClick={resetCurrent}>恢复原始</button>
-          </div>
-
-          <label>
-            审核人
-            <input
-              type="text"
-              value={reviewer}
-              maxLength={40}
-              placeholder="姓名或称呼"
-              onChange={(event) => setReviewer(event.target.value)}
-            />
-          </label>
-
-          <div className="calibration-export-actions">
-            <button type="button" onClick={exportJson}>导出校准 JSON</button>
-            <button type="button" onClick={() => void copyJson()}>{copyState}</button>
-          </div>
-          <p className="calibration-note">
-            定位文案依据 GB/T 12346—2021 整理；此页仅校准游戏模型，不提供实际针刺操作指导。
-            只有审核为“已确认”的点才建议写回正式游戏。
-          </p>
-        </aside>
-      </section>
-    </main>
-  )
-}
-
 function Scene({
   onHit,
   hit,
@@ -2266,7 +1642,7 @@ function TreatmentSummaryPage({
   )
 }
 
-function GameApp() {
+export default function App() {
   const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
   const [patientSource, setPatientSource] = useState<'ai' | 'local'>('local')
   const [patientLoading, setPatientLoading] = useState(true)
@@ -2630,13 +2006,6 @@ function GameApp() {
       )}
     </main>
   )
-}
-
-export default function App() {
-  const calibrationMode =
-    new URLSearchParams(window.location.search).get('calibrate') === '1'
-
-  return calibrationMode ? <CalibrationPage /> : <GameApp />
 }
 
 useGLTF.preload('/models/hand.glb', false)
