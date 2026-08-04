@@ -81,6 +81,8 @@ type TreatmentSummary = {
   shareText?: string
 }
 
+type AiContentStatus = 'idle' | 'loading' | 'success' | 'fallback'
+
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 const MAX_NEEDLES = 5
 const INITIAL_PATIENT_STATE: PatientState = {
@@ -1390,12 +1392,14 @@ function HomePage({
   patient,
   patientSource,
   patientLoading,
+  patientReady,
   onRegenerate,
   onStart,
 }: {
   patient: PatientProfile
   patientSource: 'ai' | 'local'
   patientLoading: boolean
+  patientReady: boolean
   onRegenerate: () => void
   onStart: () => void
 }) {
@@ -1411,44 +1415,80 @@ function HomePage({
         <p>旋转手部寻找穴位，在五针之内赢得这位患者的信任。</p>
       </header>
 
-      <section className="patient-card" aria-label="本轮虚拟患者">
-        <div className="patient-card-top">
-          <div className="patient-avatar" aria-hidden="true">
-            {patient.name.slice(0, 1)}
-          </div>
-          <div>
-            <p>本轮患者</p>
-            <h2>{patient.name} <small>{patient.age} 岁</small></h2>
-            <span>{patient.personality}</span>
-          </div>
-          <button type="button" onClick={onRegenerate} disabled={patientLoading}>
-            {patientLoading ? 'AI 生成中' : '换一位'}
-          </button>
-        </div>
+      <section
+        className={`patient-card ${patientLoading && patientReady ? 'is-refreshing' : ''}`}
+        aria-label="本轮虚拟患者"
+        aria-busy={patientLoading}
+      >
+        {patientReady ? (
+          <>
+            <div className="patient-card-top">
+              <div className="patient-avatar" aria-hidden="true">
+                {patient.name.slice(0, 1)}
+              </div>
+              <div>
+                <p>本轮患者</p>
+                <h2>{patient.name} <small>{patient.age} 岁</small></h2>
+                <span>{patient.personality}</span>
+              </div>
+              <button type="button" onClick={onRegenerate} disabled={patientLoading}>
+                {patientLoading ? 'AI 生成中' : '换一位'}
+              </button>
+            </div>
 
-        <blockquote>{patient.openingLine}</blockquote>
+            <blockquote>{patient.openingLine}</blockquote>
 
-        <div className="patient-traits">
-          <div>
-            <span>怕疼程度</span>
-            <strong>{100 - patient.painTolerance}</strong>
-            <i><b style={{ width: `${100 - patient.painTolerance}%` }} /></i>
+            <div className="patient-traits">
+              <div>
+                <span>怕疼程度</span>
+                <strong>{100 - patient.painTolerance}</strong>
+                <i><b style={{ width: `${100 - patient.painTolerance}%` }} /></i>
+              </div>
+              <div>
+                <span>血管难度</span>
+                <strong>{patient.vascularDifficulty}</strong>
+                <i><b style={{ width: `${patient.vascularDifficulty}%` }} /></i>
+              </div>
+            </div>
+            {patientLoading && (
+              <div className="patient-refresh-overlay" role="status">
+                <span className="loading-pulse" />
+                正在生成新患者
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="patient-skeleton" role="status">
+            <div className="skeleton-heading">
+              <span className="skeleton-block skeleton-avatar" />
+              <div>
+                <span className="skeleton-block skeleton-name" />
+                <span className="skeleton-block skeleton-tag" />
+              </div>
+            </div>
+            <span className="skeleton-block skeleton-dialog" />
+            <span className="skeleton-block skeleton-traits" />
+            <small><span className="loading-pulse" />百炼正在生成本轮患者</small>
           </div>
-          <div>
-            <span>血管难度</span>
-            <strong>{patient.vascularDifficulty}</strong>
-            <i><b style={{ width: `${patient.vascularDifficulty}%` }} /></i>
-          </div>
-        </div>
+        )}
       </section>
 
-      <button className="start-treatment" type="button" onClick={onStart}>
+      <button
+        className="start-treatment"
+        type="button"
+        onClick={onStart}
+        disabled={!patientReady || patientLoading}
+      >
         <span>开始疗程</span>
-        <small>共 5 针 · 约 2 分钟</small>
+        <small>{patientReady ? '共 5 针 · 约 2 分钟' : '正在准备患者'}</small>
       </button>
 
       <p className="home-disclaimer">
-        {patientSource === 'ai' ? '患者由阿里云百炼生成。' : '当前使用本地患者，百炼不可用时游戏仍可继续。'}
+        {!patientReady
+          ? '正在连接阿里云百炼。'
+          : patientSource === 'ai'
+            ? '患者由阿里云百炼生成。'
+            : '百炼暂不可用，当前使用本地患者。'}
         本作品不是医学训练软件。
       </p>
     </main>
@@ -1488,67 +1528,24 @@ function TreatmentSummaryPage({
   patientState,
   hits,
   targets,
+  summary,
+  summaryStatus,
   onRestart,
 }: {
   patient: PatientProfile
   patientState: PatientState
   hits: Hit[]
   targets: NeedleTarget[]
+  summary: TreatmentSummary | null
+  summaryStatus: AiContentStatus
   onRestart: () => void
 }) {
   const localSummary = useMemo(
     () => createLocalTreatmentSummary(patientState, hits, patient),
     [patientState, hits, patient],
   )
-  const [summary, setSummary] = useState<TreatmentSummary>(localSummary)
-  const [isAiLoading, setIsAiLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    const records = hits.map((item, index) => ({
-      index: item.needleNumber,
-      acupoint: targets[index] ? `${targets[index].code} ${targets[index].name}` : item.label,
-      result: item.result,
-      distance: Number(item.distance.toFixed(1)),
-      correctSurface: item.correctSurface,
-    }))
-
-    requestAiTreatmentReport({
-      patientJson: JSON.stringify({
-        name: patient.name,
-        age: patient.age,
-        painTolerance: patient.painTolerance,
-        vascularDifficulty: patient.vascularDifficulty,
-        personality: patient.personality,
-      }),
-      stateJson: JSON.stringify(patientState),
-      recordsJson: JSON.stringify(records),
-    })
-      .then((aiReport) => {
-        if (cancelled) return
-        const patientDialog = aiReport.patientDialog
-          .trim()
-          .replace(/^["“”]+|["“”]+$/g, '')
-        setSummary({
-          ...localSummary,
-          review: aiReport.comment,
-          dialog: `${patient.name}：“${patientDialog}”`,
-          shareText: aiReport.shareText,
-          source: 'ai',
-        })
-      })
-      .catch((error) => {
-        console.warn('[Needle Roulette AI] report fallback', error)
-        if (!cancelled) setSummary(localSummary)
-      })
-      .finally(() => {
-        if (!cancelled) setIsAiLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [hits, localSummary, patient, patientState, targets])
+  const displaySummary = summary ?? localSummary
+  const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
 
   return (
     <main className="summary-shell">
@@ -1556,33 +1553,44 @@ function TreatmentSummaryPage({
         <p className="eyebrow">NEEDLE ROULETTE · SESSION REPORT</p>
         <span>{patient.name} · 疗程完成</span>
         <h1>本次表现<br />有点东西</h1>
-        <p>{summary.title}</p>
+        <p>{displaySummary.title}</p>
       </header>
 
       <section className="score-card">
-        <div className="score-ring" style={{ '--score': summary.satisfaction } as React.CSSProperties}>
-          <strong>{summary.satisfaction}</strong>
+        <div className="score-ring" style={{ '--score': displaySummary.satisfaction } as React.CSSProperties}>
+          <strong>{displaySummary.satisfaction}</strong>
           <span>满意度</span>
         </div>
         <div className="score-copy">
           <p>趣味评分</p>
-          <div className="rating-stars" aria-label={`${summary.rating} 星`}>
+          <div className="rating-stars" aria-label={`${displaySummary.rating} 星`}>
             {Array.from({ length: 5 }, (_, index) => (
-              <span key={index} className={index < summary.rating ? 'active' : ''}>★</span>
+              <span key={index} className={index < displaySummary.rating ? 'active' : ''}>★</span>
             ))}
           </div>
           <small>
-            {isAiLoading ? '百炼正在生成评价…' : summary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
+            {isAiLoading ? '百炼正在生成评价…' : displaySummary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
           </small>
         </div>
       </section>
 
       <PatientStatus state={patientState} />
 
-      <section className="ai-review">
+      <section className={`ai-review ${isAiLoading ? 'is-loading' : ''}`} aria-busy={isAiLoading}>
         <p>疗程评价</p>
-        <h2>{summary.review}</h2>
-        <blockquote>{summary.dialog}</blockquote>
+        {isAiLoading ? (
+          <div className="review-skeleton" role="status">
+            <span className="skeleton-block" />
+            <span className="skeleton-block" />
+            <span className="skeleton-block short" />
+            <small><span className="loading-pulse" />正在分析五针记录</small>
+          </div>
+        ) : (
+          <>
+            <h2>{displaySummary.review}</h2>
+            <blockquote>{displaySummary.dialog}</blockquote>
+          </>
+        )}
       </section>
 
       <section className="needle-history">
@@ -1614,7 +1622,11 @@ function TreatmentSummaryPage({
         接诊下一位患者
       </button>
       <p className="summary-disclaimer">
-        {summary.source === 'ai' ? '本次趣味对白由阿里云百炼生成。' : 'AI 暂不可用，已自动切换到本地总结。'}
+        {isAiLoading
+          ? '百炼正在整理本次疗程。'
+          : displaySummary.source === 'ai'
+            ? '本次趣味对白由阿里云百炼生成。'
+            : 'AI 暂不可用，已自动切换到本地总结。'}
         内容仅作游戏科普，不构成医学建议。
       </p>
     </main>
@@ -1625,6 +1637,7 @@ export default function App() {
   const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
   const [patientSource, setPatientSource] = useState<'ai' | 'local'>('local')
   const [patientLoading, setPatientLoading] = useState(true)
+  const [patientReady, setPatientReady] = useState(false)
   const [started, setStarted] = useState(false)
   const [hit, setHit] = useState<Hit | null>(null)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
@@ -1637,18 +1650,77 @@ export default function App() {
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
   )
+  const [treatmentSummary, setTreatmentSummary] = useState<TreatmentSummary | null>(null)
+  const [summaryStatus, setSummaryStatus] = useState<AiContentStatus>('idle')
   const patientRequestId = useRef(0)
+  const summaryRequestId = useRef(0)
   const startedRef = useRef(false)
+
+  const prepareTreatmentSummary = async (
+    finalState: PatientState,
+    finalHits: Hit[],
+    targets: NeedleTarget[],
+  ) => {
+    const requestId = summaryRequestId.current + 1
+    summaryRequestId.current = requestId
+    const localSummary = createLocalTreatmentSummary(finalState, finalHits, patient)
+    const records = finalHits.map((item, index) => ({
+      index: item.needleNumber,
+      acupoint: targets[index] ? `${targets[index].code} ${targets[index].name}` : item.label,
+      result: item.result,
+      distance: Number(item.distance.toFixed(1)),
+      correctSurface: item.correctSurface,
+    }))
+
+    setTreatmentSummary(null)
+    setSummaryStatus('loading')
+
+    try {
+      const aiReport = await requestAiTreatmentReport({
+        patientJson: JSON.stringify({
+          name: patient.name,
+          age: patient.age,
+          painTolerance: patient.painTolerance,
+          vascularDifficulty: patient.vascularDifficulty,
+          personality: patient.personality,
+        }),
+        stateJson: JSON.stringify(finalState),
+        recordsJson: JSON.stringify(records),
+      })
+      if (summaryRequestId.current !== requestId) return
+      const patientDialog = aiReport.patientDialog
+        .trim()
+        .replace(/^["“”]+|["“”]+$/g, '')
+      setTreatmentSummary({
+        ...localSummary,
+        review: aiReport.comment,
+        dialog: `${patient.name}：“${patientDialog}”`,
+        shareText: aiReport.shareText,
+        source: 'ai',
+      })
+      setSummaryStatus('success')
+    } catch (error) {
+      console.warn('[Needle Roulette AI] report fallback', error)
+      if (summaryRequestId.current !== requestId) return
+      setTreatmentSummary(localSummary)
+      setSummaryStatus('fallback')
+    }
+  }
 
   const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
     if (hit || needleCount >= MAX_NEEDLES) return
     const nextCount = needleCount + 1
     const recordedHit = { ...nextHit, needleNumber: nextCount }
+    const nextHits = [...treatmentHits, recordedHit]
+    const nextPatientState = applyNeedleResult(patientState, nextHit.result, patient)
     setNeedleCount(nextCount)
     setHit(recordedHit)
-    setTreatmentHits((current) => [...current, recordedHit])
-    setPatientState((current) => applyNeedleResult(current, nextHit.result, patient))
+    setTreatmentHits(nextHits)
+    setPatientState(nextPatientState)
     setShowFeedback(false)
+    if (nextCount === MAX_NEEDLES) {
+      void prepareTreatmentSummary(nextPatientState, nextHits, sessionTargets)
+    }
     playNeedleSound(nextHit.result)
     if ('vibrate' in navigator) {
       const vibrationPatterns: Record<NeedleResult, number | number[]> = {
@@ -1680,39 +1752,48 @@ export default function App() {
   }
 
   const resetTreatment = (nextPatient: PatientProfile) => {
+    summaryRequestId.current += 1
     setHit(null)
     setTreatmentHits([])
     setNeedleCount(0)
     setPatientState(createInitialPatientState(nextPatient))
     setShowFeedback(false)
     setShowSummary(false)
+    setTreatmentSummary(null)
+    setSummaryStatus('idle')
     setSessionTargets(createTreatmentPlan())
   }
 
-  const regeneratePatient = async () => {
+  const regeneratePatient = async (replaceCurrent = false) => {
     const requestId = patientRequestId.current + 1
     patientRequestId.current = requestId
-    const fallbackPatient = createLocalPatient()
-    setPatient(fallbackPatient)
-    setPatientSource('local')
     setPatientLoading(true)
-    resetTreatment(fallbackPatient)
+    if (replaceCurrent) setPatientReady(false)
 
     try {
       const generatedPatient = createPatientFromAi(await requestAiPatient())
       if (patientRequestId.current !== requestId || startedRef.current) return
       setPatient(generatedPatient)
       setPatientSource('ai')
+      setPatientReady(true)
       resetTreatment(generatedPatient)
     } catch (error) {
       console.warn('[Needle Roulette AI] patient fallback', error)
-      // The locally generated patient is the intentional offline fallback.
+      if (patientRequestId.current !== requestId || startedRef.current) return
+      if (replaceCurrent || !patientReady) {
+        const fallbackPatient = createLocalPatient()
+        setPatient(fallbackPatient)
+        setPatientSource('local')
+        setPatientReady(true)
+        resetTreatment(fallbackPatient)
+      }
     } finally {
       if (patientRequestId.current === requestId) setPatientLoading(false)
     }
   }
 
   const startTreatment = () => {
+    if (patientLoading || !patientReady) return
     startedRef.current = true
     patientRequestId.current += 1
     setPatientLoading(false)
@@ -1723,11 +1804,11 @@ export default function App() {
   const restartTreatment = () => {
     startedRef.current = false
     setStarted(false)
-    void regeneratePatient()
+    void regeneratePatient(true)
   }
 
   useEffect(() => {
-    void regeneratePatient()
+    void regeneratePatient(true)
     // Generate once on mount; later requests are user initiated.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1747,6 +1828,7 @@ export default function App() {
         patient={patient}
         patientSource={patientSource}
         patientLoading={patientLoading}
+        patientReady={patientReady}
         onRegenerate={regeneratePatient}
         onStart={startTreatment}
       />
@@ -1760,6 +1842,8 @@ export default function App() {
         patientState={patientState}
         hits={treatmentHits}
         targets={sessionTargets}
+        summary={treatmentSummary}
+        summaryStatus={summaryStatus}
         onRestart={restartTreatment}
       />
     )

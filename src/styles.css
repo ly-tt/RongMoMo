@@ -155,8 +155,11 @@ h1 {
 }
 
 .patient-card {
+  position: relative;
+  min-height: 184px;
   margin-top: auto;
   padding: 18px;
+  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.095);
   border-radius: 26px;
   background:
@@ -164,6 +167,109 @@ h1 {
     rgba(255, 255, 255, 0.035);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(16px);
+}
+
+.patient-card.is-refreshing > :not(.patient-refresh-overlay) {
+  opacity: 0.44;
+}
+
+.patient-refresh-overlay {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #dedbe0;
+  background: rgba(8, 10, 18, 0.48);
+  backdrop-filter: blur(3px);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.loading-pulse {
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+  border-radius: 50%;
+  background: #77a7ff;
+  box-shadow: 0 0 12px rgba(119, 167, 255, 0.7);
+  animation: loading-pulse 1s ease-in-out infinite;
+}
+
+.patient-skeleton {
+  display: grid;
+  gap: 14px;
+}
+
+.patient-skeleton small,
+.review-skeleton small {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #747685;
+  font-size: 9px;
+}
+
+.skeleton-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.skeleton-heading > div {
+  flex: 1;
+  display: grid;
+  gap: 7px;
+}
+
+.skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.skeleton-block::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background: linear-gradient(
+    100deg,
+    transparent 18%,
+    rgba(255, 255, 255, 0.11) 48%,
+    transparent 78%
+  );
+  transform: translateX(-100%);
+  animation: skeleton-shimmer 1.45s ease-in-out infinite;
+}
+
+.skeleton-avatar {
+  width: 47px;
+  height: 47px;
+  flex: 0 0 auto;
+  border-radius: 16px;
+}
+
+.skeleton-name {
+  width: 46%;
+  height: 14px;
+}
+
+.skeleton-tag {
+  width: 28%;
+  height: 8px;
+}
+
+.skeleton-dialog {
+  height: 48px;
+}
+
+.skeleton-traits {
+  height: 24px;
 }
 
 .patient-card-top {
@@ -306,6 +412,13 @@ h1 {
   color: rgba(9, 11, 16, 0.62);
   font-size: 9px;
   font-weight: 700;
+}
+
+.start-treatment:disabled {
+  cursor: wait;
+  filter: saturate(0.45);
+  opacity: 0.58;
+  box-shadow: none;
 }
 
 .home-disclaimer {
@@ -967,6 +1080,27 @@ h1 {
   line-height: 1.6;
 }
 
+.ai-review.is-loading {
+  min-height: 174px;
+}
+
+.review-skeleton {
+  display: grid;
+  gap: 9px;
+}
+
+.review-skeleton .skeleton-block {
+  height: 16px;
+}
+
+.review-skeleton .skeleton-block.short {
+  width: 62%;
+}
+
+.review-skeleton small {
+  margin-top: 16px;
+}
+
 .needle-history {
   margin-top: 12px;
   padding: 18px;
@@ -1110,6 +1244,21 @@ h1 {
   }
 }
 
+@keyframes skeleton-shimmer {
+  to { transform: translateX(100%); }
+}
+
+@keyframes loading-pulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
 @media (min-width: 700px) {
   body {
     overflow: auto;
@@ -1146,5 +1295,10 @@ h1 {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+
+  .skeleton-block::after,
+  .loading-pulse {
+    animation: none !important;
   }
 }
