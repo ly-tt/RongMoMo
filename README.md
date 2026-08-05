@@ -1,4 +1,4 @@
-<img width="715" height="1294" alt="image" src="https://github.com/user-attachments/assets/a5a64313-c1c8-45e0-b745-f09b48aebb1a" />## 参赛项目名称
+## 参赛项目名称
 
 <!-- 你的作品 / 项目名称 -->
 《一针见血？》 / Needle Roulette
