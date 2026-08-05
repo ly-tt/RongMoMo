@@ -6,6 +6,7 @@ import {
   requestAiPatient,
   requestAiTreatmentReport,
   type AiPatient,
+  type AiPatientFingerprint,
 } from './services/aiService'
 
 type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
@@ -285,8 +286,13 @@ function clampState(value: number) {
   return Math.round(THREE.MathUtils.clamp(value, 0, 100))
 }
 
-export function createLocalPatient(): PatientProfile {
-  const archetype = PATIENT_ARCHETYPES[Math.floor(Math.random() * PATIENT_ARCHETYPES.length)]
+export function createLocalPatient(excludedNames: string[] = []): PatientProfile {
+  const availableArchetypes = PATIENT_ARCHETYPES.filter(
+    (archetype) => !excludedNames.includes(archetype.name),
+  )
+  const patientPool =
+    availableArchetypes.length > 0 ? availableArchetypes : PATIENT_ARCHETYPES
+  const archetype = patientPool[Math.floor(Math.random() * patientPool.length)]
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     ...archetype,
@@ -311,6 +317,21 @@ function createPatientFromAi(patient: AiPatient): PatientProfile {
       0.78,
       1.23,
     ),
+  }
+}
+
+function createPatientFingerprint(
+  patient: Pick<
+    PatientProfile,
+    'name' | 'age' | 'painTolerance' | 'vascularDifficulty' | 'personality'
+  >,
+): AiPatientFingerprint {
+  return {
+    name: patient.name,
+    age: patient.age,
+    painTolerance: patient.painTolerance,
+    vascularDifficulty: patient.vascularDifficulty,
+    personality: patient.personality,
   }
 }
 
@@ -1497,7 +1518,7 @@ function HomePage({
           ? '正在连接阿里云百炼。'
           : patientSource === 'ai'
             ? '患者由阿里云百炼生成。'
-            : '百炼暂不可用，当前使用本地患者。'}
+            : '百炼未返回可用的新患者，已使用本地候选。'}
         本作品不是医学训练软件。
       </p>
     </main>
@@ -1664,6 +1685,7 @@ export default function App() {
   const patientRequestId = useRef(0)
   const summaryRequestId = useRef(0)
   const startedRef = useRef(false)
+  const patientHistoryRef = useRef<AiPatientFingerprint[]>([])
 
   const prepareTreatmentSummary = async (
     finalState: PatientState,
@@ -1778,10 +1800,25 @@ export default function App() {
     patientRequestId.current = requestId
     setPatientLoading(true)
     if (replaceCurrent) setPatientReady(false)
+    const currentFingerprint = createPatientFingerprint(patient)
+    const recentPatients = [
+      currentFingerprint,
+      ...patientHistoryRef.current.filter(
+        (item) =>
+          item.name !== currentFingerprint.name ||
+          item.age !== currentFingerprint.age,
+      ),
+    ].slice(0, 5)
 
     try {
-      const generatedPatient = createPatientFromAi(await requestAiPatient())
+      const generatedPatient = createPatientFromAi(
+        await requestAiPatient(recentPatients),
+      )
       if (patientRequestId.current !== requestId || startedRef.current) return
+      patientHistoryRef.current = [
+        createPatientFingerprint(generatedPatient),
+        ...recentPatients,
+      ].slice(0, 5)
       setPatient(generatedPatient)
       setPatientSource('ai')
       setPatientReady(true)
@@ -1790,7 +1827,13 @@ export default function App() {
       console.warn('[Needle Roulette AI] patient fallback', error)
       if (patientRequestId.current !== requestId || startedRef.current) return
       if (replaceCurrent || !patientReady) {
-        const fallbackPatient = createLocalPatient()
+        const fallbackPatient = createLocalPatient(
+          recentPatients.map((item) => item.name),
+        )
+        patientHistoryRef.current = [
+          createPatientFingerprint(fallbackPatient),
+          ...patientHistoryRef.current,
+        ].slice(0, 5)
         setPatient(fallbackPatient)
         setPatientSource('local')
         setPatientReady(true)

@@ -7,6 +7,11 @@ export type AiPatient = {
   openingDialog: string
 }
 
+export type AiPatientFingerprint = Pick<
+  AiPatient,
+  'name' | 'age' | 'painTolerance' | 'vascularDifficulty' | 'personality'
+>
+
 export type AiTreatmentReport = {
   satisfaction: number
   rating: 'S' | 'A' | 'B' | 'C' | 'D'
@@ -25,6 +30,18 @@ const API_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL ?? '').replace(/\/$/,
 // Keep the browser timeout slightly above the proxy's 10 s upstream timeout,
 // otherwise a valid Bailian response can arrive after the UI has already fallen back.
 const REQUEST_TIMEOUT_MS = 12_000
+const PATIENT_AGE_RANGES = ['18～25', '26～35', '36～45', '46～60'] as const
+const PATIENT_PERSONALITY_DIRECTIONS = [
+  '嘴硬但怕疼',
+  '冷静理性',
+  '活泼话多',
+  '紧张谨慎',
+  '幽默乐观',
+  '沉默慢热',
+  '好奇冒险',
+  '温和佛系',
+] as const
+const OVERUSED_PATIENT_NAMES = ['阿哲', '小王'] as const
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -75,6 +92,7 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
+      cache: 'no-store',
     })
     const requestId = response.headers.get('x-request-id') || 'unknown'
     if (!response.ok) {
@@ -92,12 +110,117 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
   }
 }
 
-export async function requestAiPatient(): Promise<AiPatient> {
+function createPatientDiversityPrompt(
+  recentPatients: AiPatientFingerprint[],
+  attempt: number,
+) {
+  const seed =
+    typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10)
+  const ageRange =
+    PATIENT_AGE_RANGES[Math.floor(Math.random() * PATIENT_AGE_RANGES.length)]
+  const personality =
+    PATIENT_PERSONALITY_DIRECTIONS[
+      Math.floor(Math.random() * PATIENT_PERSONALITY_DIRECTIONS.length)
+    ]
+  const previous = recentPatients[0]
+  const excludedNames = [
+    ...new Set([
+      ...recentPatients.slice(0, 5).map((patient) => patient.name.trim()),
+      ...OVERUSED_PATIENT_NAMES,
+    ]),
+  ].join('、')
+
+  return [
+    `生成全新患者，随机令牌${seed}，这是第${attempt}次候选。`,
+    `禁用姓名：${excludedNames}；新姓名不得重复。`,
+    previous ? `年龄不得为${previous.age}岁，` : '',
+    `年龄限定${ageRange}岁，性格方向“${personality}”。`,
+    '耐痛和血管难度也要与上一位明显不同，严格返回约定JSON。',
+  ]
+    .join('')
+    .slice(0, 195)
+}
+
+function isRepeatedPatient(
+  candidate: AiPatient,
+  recentPatients: AiPatientFingerprint[],
+) {
+  const previous = recentPatients[0]
+  if (!previous) return false
+
+  const normalizedName = candidate.name.trim().toLocaleLowerCase()
+  const repeatedName = recentPatients.some(
+    (patient) => patient.name.trim().toLocaleLowerCase() === normalizedName,
+  )
+  const overusedName = OVERUSED_PATIENT_NAMES.some(
+    (name) => name.toLocaleLowerCase() === normalizedName,
+  )
+  const repeatedAge = candidate.age === previous.age
+  const closePain =
+    Math.abs(candidate.painTolerance - previous.painTolerance) <= 5
+  const closeVascular =
+    Math.abs(candidate.vascularDifficulty - previous.vascularDifficulty) <= 5
+  const repeatedPersonality =
+    candidate.personality.trim() === previous.personality.trim()
+
+  return (
+    repeatedName ||
+    overusedName ||
+    repeatedAge ||
+    (closePain && closeVascular) ||
+    (repeatedPersonality && (closePain || closeVascular))
+  )
+}
+
+function hasOverusedPatientName(candidate: AiPatient) {
+  const normalizedName = candidate.name.trim().toLocaleLowerCase()
+  return OVERUSED_PATIENT_NAMES.some(
+    (name) => name.toLocaleLowerCase() === normalizedName,
+  )
+}
+
+async function requestAiPatientCandidate(
+  recentPatients: AiPatientFingerprint[],
+  attempt: number,
+) {
   const response = await postJson('/api/ai/patient', {
-    query: '请随机生成一名适合本局游戏的新患者，避免与常见示例完全相同。',
+    query: createPatientDiversityPrompt(recentPatients, attempt),
   })
   if (!isAiPatient(response)) throw new Error('Invalid AI patient response')
   return response
+}
+
+export async function requestAiPatient(
+  recentPatients: AiPatientFingerprint[] = [],
+): Promise<AiPatient> {
+  const firstCandidate = await requestAiPatientCandidate(recentPatients, 1)
+  const firstRepeated = isRepeatedPatient(firstCandidate, recentPatients)
+  console.info('[Needle Roulette AI] patient candidate', {
+    attempt: 1,
+    name: firstCandidate.name,
+    age: firstCandidate.age,
+    repeated: firstRepeated,
+  })
+  if (!firstRepeated) return firstCandidate
+  if (hasOverusedPatientName(firstCandidate)) {
+    throw new Error('AI patient workflow returned an overused fixed template')
+  }
+
+  const retryHistory = [firstCandidate, ...recentPatients].slice(0, 6)
+  const secondCandidate = await requestAiPatientCandidate(retryHistory, 2)
+  const secondRepeated = isRepeatedPatient(secondCandidate, retryHistory)
+  console.info('[Needle Roulette AI] patient candidate', {
+    attempt: 2,
+    name: secondCandidate.name,
+    age: secondCandidate.age,
+    repeated: secondRepeated,
+  })
+  if (secondRepeated) {
+    throw new Error('Repeated AI patient response after retry')
+  }
+  return secondCandidate
 }
 
 export async function requestAiTreatmentReport(
