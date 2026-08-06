@@ -15,6 +15,10 @@ import {
   getTreatmentStress,
   type PatientChallenge,
 } from './game/patientChallenge'
+import {
+  selectNeedleReaction,
+  type NeedleReaction,
+} from './game/needleReaction'
 
 type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
@@ -32,6 +36,7 @@ type Hit = {
   surfaceIssue: string | null
   result: NeedleResult
   eventZone: EventZone
+  reaction: NeedleReaction
   needleNumber: number
 }
 
@@ -166,6 +171,14 @@ const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
   NERVE: { pain: 24, bruise: 0, bleeding: 0, numb: 34, trust: -18 },
   BRUISE: { pain: 10, bruise: 26, bleeding: 2, numb: 0, trust: -8 },
   BONE: { pain: 28, bruise: 5, bleeding: 0, numb: 3, trust: -22 },
+}
+
+const REACTION_IMPACT: Partial<Record<NeedleReaction['code'], StateDelta>> = {
+  HEMATOMA: { pain: 8, bruise: 18, bleeding: 10, numb: 0, trust: -8 },
+  PERSISTENT_NUMBNESS: { pain: 10, bruise: 0, bleeding: 0, numb: 20, trust: -10 },
+  VASOVAGAL: { pain: 5, bruise: 0, bleeding: 0, numb: 6, trust: -25 },
+  STUCK_NEEDLE: { pain: 12, bruise: 3, bleeding: 0, numb: 0, trust: -15 },
+  BRUISE_SPREAD: { pain: 5, bruise: 14, bleeding: 3, numb: 0, trust: -7 },
 }
 
 /**
@@ -369,16 +382,25 @@ function createInitialPatientState(patient: PatientProfile): PatientState {
   }
 }
 
-function getPatientImpact(result: NeedleResult, patient: PatientProfile): StateDelta {
+function getPatientImpact(
+  result: NeedleResult,
+  patient: PatientProfile,
+  reaction?: NeedleReaction,
+): StateDelta {
   const delta = RESULT_IMPACT[result]
+  const reactionDelta = reaction ? REACTION_IMPACT[reaction.code] : undefined
   const painMultiplier = 0.72 + (100 - patient.painTolerance) * 0.008
   const bleedingMultiplier = 0.7 + patient.vascularDifficulty * 0.007
   return {
-    pain: Math.round(delta.pain * painMultiplier),
-    bruise: delta.bruise,
-    bleeding: Math.round(delta.bleeding * bleedingMultiplier),
-    numb: delta.numb,
-    trust: Math.round(delta.trust * patient.trustSensitivity),
+    pain: Math.round(delta.pain * painMultiplier) + (reactionDelta?.pain ?? 0),
+    bruise: delta.bruise + (reactionDelta?.bruise ?? 0),
+    bleeding:
+      Math.round(delta.bleeding * bleedingMultiplier) +
+      (reactionDelta?.bleeding ?? 0),
+    numb: delta.numb + (reactionDelta?.numb ?? 0),
+    trust:
+      Math.round(delta.trust * patient.trustSensitivity) +
+      (reactionDelta?.trust ?? 0),
   }
 }
 
@@ -386,8 +408,9 @@ function applyNeedleResult(
   state: PatientState,
   result: NeedleResult,
   patient: PatientProfile,
+  reaction?: NeedleReaction,
 ): PatientState {
-  const delta = getPatientImpact(result, patient)
+  const delta = getPatientImpact(result, patient, reaction)
   return {
     pain: clampState(state.pain + delta.pain),
     bruise: clampState(state.bruise + delta.bruise),
@@ -1407,6 +1430,22 @@ function RealisticHand({
       sourcePoint,
       vascularDifficulty,
     })
+    const reactionSeed =
+      Math.abs(
+        Math.sin(
+          sourcePoint.x * 19.73 +
+            sourcePoint.y * 47.11 +
+            sourcePoint.z * 83.17 +
+            charge.stability * 7.31,
+        ) * 24634.6345,
+      ) % 1
+    const reaction = selectNeedleReaction({
+      result,
+      stability: charge.stability,
+      vascularDifficulty,
+      treatmentStress,
+      seed: reactionSeed,
+    })
     const markerPoint = event.point.clone().addScaledVector(normal, 0.025)
     const markerRotation = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
@@ -1429,6 +1468,7 @@ function RealisticHand({
       surfaceIssue,
       result,
       eventZone,
+      reaction,
     })
   }
 
@@ -1856,13 +1896,17 @@ function TreatmentSummaryPage({
             <article key={item.needleNumber}>
               <span
                 className="history-icon"
-                style={{ '--history-color': copy.accent } as React.CSSProperties}
+                style={{ '--history-color': item.reaction.accent } as React.CSSProperties}
               >
-                {copy.icon}
+                {item.reaction.icon}
               </span>
               <div>
                 <strong>第 {item.needleNumber} 针 · {target.code} {target.name}</strong>
-                <small>{copy.title} · {item.correctSurface ? `误差 ${item.distance.toFixed(1)}` : item.surfaceIssue}</small>
+                <small>
+                  {copy.title} → {item.reaction.title} · {item.correctSurface
+                    ? `误差 ${item.distance.toFixed(1)}`
+                    : item.surfaceIssue}
+                </small>
               </div>
             </article>
           )
@@ -1931,6 +1975,9 @@ export default function App() {
       index: item.needleNumber,
       acupoint: targets[index] ? `${targets[index].code} ${targets[index].name}` : item.label,
       result: item.result,
+      reaction: item.reaction.code,
+      reactionTitle: item.reaction.title,
+      reactionSeverity: item.reaction.severity,
       distance: Number(item.distance.toFixed(1)),
       correctSurface: item.correctSurface,
       stability: Math.round(item.stability * 100),
@@ -1985,7 +2032,12 @@ export default function App() {
     const nextCount = needleCount + 1
     const recordedHit = { ...nextHit, needleNumber: nextCount }
     const nextHits = [...treatmentHits, recordedHit]
-    const nextPatientState = applyNeedleResult(patientState, nextHit.result, patient)
+    const nextPatientState = applyNeedleResult(
+      patientState,
+      nextHit.result,
+      patient,
+      nextHit.reaction,
+    )
     setNeedleCount(nextCount)
     setNeedleCharge(EMPTY_CHARGE)
     setHit(recordedHit)
@@ -2113,9 +2165,14 @@ export default function App() {
   }, [])
 
   const feedback = hit ? RESULT_COPY[hit.result] : null
-  const activeDelta = hit ? getPatientImpact(hit.result, patient) : null
+  const reaction = hit?.reaction ?? null
+  const activeDelta = hit
+    ? getPatientImpact(hit.result, patient, hit.reaction)
+    : null
   const patientReaction = hit
-    ? getPatientReaction(patient, patientState, hit, treatmentHits)
+    ? hit.reaction.code === 'DE_QI'
+      ? getPatientReaction(patient, patientState, hit, treatmentHits)
+      : hit.reaction.patientLine
     : ''
   const challengeProgress = evaluatePatientChallenge(
     patientChallenge,
@@ -2129,6 +2186,9 @@ export default function App() {
   )
   const activeTarget = sessionTargets[targetIndex]
   const activeEffect = hit?.result.toLowerCase() ?? ''
+  const activeReactionClass = reaction
+    ? `reaction-${reaction.code.toLowerCase().replaceAll('_', '-')}`
+    : ''
   const isChallengeMode = gameMode === 'CHALLENGE'
   const successStreak = getSuccessStreak(treatmentHits)
   const chargeInstruction =
@@ -2169,7 +2229,7 @@ export default function App() {
 
   return (
     <main
-      className={`app-shell mode-${gameMode.toLowerCase()} ${hit ? `result-${activeEffect}` : ''} ${
+      className={`app-shell mode-${gameMode.toLowerCase()} ${hit ? `result-${activeEffect}` : ''} ${activeReactionClass} ${
         treatmentStress >= 0.35 ? 'state-stressed' : ''
       }`}
     >
@@ -2190,11 +2250,15 @@ export default function App() {
         </div>
       )}
       {hit && !showFeedback && (
-        <div className="impact-callout" aria-live="assertive">
-          <span>{RESULT_COPY[hit.result].icon}</span>
-          <strong>{RESULT_COPY[hit.result].title}</strong>
+        <div
+          className={`impact-callout severity-${hit.reaction.severity.toLowerCase()}`}
+          style={{ '--impact-color': hit.reaction.accent } as React.CSSProperties}
+          aria-live="assertive"
+        >
+          <span>{hit.reaction.icon}</span>
+          <strong>{hit.reaction.title}</strong>
           <small>
-            {isChallengeMode
+            {hit.reaction.classification} · {isChallengeMode
               ? `稳定度 ${Math.round(hit.stability * 100)}%`
               : '简单版 · 位置判定'}
             {hit.result === 'SUCCESS' && successStreak >= 2 ? ` · ${successStreak} COMBO` : ''}
@@ -2321,19 +2385,19 @@ export default function App() {
         </div>
       </footer>
 
-      {showFeedback && feedback && hit && (
+      {showFeedback && feedback && reaction && hit && (
         <div className="feedback-backdrop" role="presentation">
           <section
-            className="feedback-card"
+            className={`feedback-card severity-${reaction.severity.toLowerCase()}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="feedback-title"
-            style={{ '--result-color': feedback.accent } as React.CSSProperties}
+            style={{ '--result-color': reaction.accent } as React.CSSProperties}
           >
-            <div className="result-icon">{feedback.icon}</div>
+            <div className="result-icon">{reaction.icon}</div>
             <p className="feedback-kicker">第 {hit.needleNumber} / {MAX_NEEDLES} 针</p>
-            <h2 id="feedback-title">{feedback.title}</h2>
-            <p>{feedback.message}</p>
+            <h2 id="feedback-title">{reaction.title}</h2>
+            <p>{reaction.message}</p>
             <blockquote className="patient-reaction">
               <span>{patient.name}</span>
               “{patientReaction}”
@@ -2351,6 +2415,10 @@ export default function App() {
             <div className="event-zone-row">
               <span>触发区域</span>
               <strong>{feedback.zone}</strong>
+            </div>
+            <div className={`reaction-type severity-${reaction.severity.toLowerCase()}`}>
+              <span>反应性质</span>
+              <strong>{reaction.classification}</strong>
             </div>
             <div className="distance-row">
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
@@ -2383,11 +2451,13 @@ export default function App() {
                   })}
               </div>
             )}
-            <p className="safety-note">{feedback.safety}</p>
+            <p className="safety-note">{reaction.safety}</p>
             <button type="button" onClick={continueGame}>
               {needleCount >= MAX_NEEDLES ? '查看疗程报告' : '继续下一针'}
             </button>
-            <p className="education-note">穴位定位参考 WHO 标准，仅作游戏科普，不构成医疗建议。</p>
+            <p className="education-note">
+              仅模拟手部即时反应；感染属于延迟风险，胸痛、呼吸困难等高危信号不作为随机娱乐事件。
+            </p>
           </section>
         </div>
       )}
