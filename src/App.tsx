@@ -103,8 +103,9 @@ type AiContentStatus = 'idle' | 'loading' | 'success' | 'fallback'
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 const MAX_NEEDLES = 5
-const MIN_CHARGE_DURATION = 280
-const FULL_CHARGE_DURATION = 1250
+const MIN_CHARGE_DURATION = 220
+const FULL_CHARGE_DURATION = 1500
+const NEEDLE_CONTACT_DELAY = 0.32
 const EMPTY_CHARGE: NeedleChargeState = {
   active: false,
   progress: 0,
@@ -528,9 +529,9 @@ const RESULT_COPY: Record<
 function getNeedleCharge(elapsedMs: number): NeedleChargeState {
   const progress = THREE.MathUtils.clamp(elapsedMs / FULL_CHARGE_DURATION, 0, 1)
   const cursor =
-    0.5 + Math.sin((elapsedMs / 1000) * Math.PI * 2.15 - Math.PI / 2) * 0.5
+    0.5 + Math.sin((elapsedMs / 1000) * Math.PI * 1.05 - Math.PI / 2) * 0.5
   const centeredness = 1 - Math.abs(cursor - 0.5) * 2
-  const readiness = THREE.MathUtils.smoothstep(progress, 0.18, 0.48)
+  const readiness = THREE.MathUtils.smoothstep(progress, 0.1, 0.26)
   return {
     active: true,
     progress,
@@ -558,7 +559,7 @@ function classifyNeedleEvent({
   sourcePoint: THREE.Vector3
   vascularDifficulty: number
 }): { result: NeedleResult; eventZone: EventZone } {
-  const effectiveDistance = distance + (1 - stability) * 1.25
+  const effectiveDistance = distance + (1 - stability) * 0.85
   if (correctSurface && effectiveDistance <= 0.82) {
     return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
   }
@@ -887,7 +888,7 @@ function Needle({ hit }: { hit: Hit }) {
     needle.current.position.z = THREE.MathUtils.damp(
       needle.current.position.z,
       insertionTarget,
-      hit.result === 'BONE' ? 13 : 9,
+      hit.result === 'BONE' ? 8 : 5.2,
       delta,
     )
     needle.current.rotation.x =
@@ -1212,8 +1213,18 @@ function BoneEffect() {
 }
 
 function HitEffect({ hit }: { hit: Hit }) {
+  const group = useRef<THREE.Group>(null)
+  const elapsed = useRef(0)
+
+  useFrame((_, delta) => {
+    elapsed.current += delta
+    if (group.current) {
+      group.current.visible = elapsed.current >= NEEDLE_CONTACT_DELAY
+    }
+  })
+
   return (
-    <group position={hit.point} quaternion={hit.rotation}>
+    <group ref={group} visible={false} position={hit.point} quaternion={hit.rotation}>
       {hit.result === 'SUCCESS' && <SuccessEffect />}
       {hit.result === 'BLOOD' && <BloodEffect />}
       {hit.result === 'NERVE' && <NerveEffect />}
@@ -1458,14 +1469,22 @@ function ImpactCamera({ result }: { result: NeedleResult }) {
 
   useFrame((_, delta) => {
     elapsed.current += delta
-    const progress = THREE.MathUtils.clamp(elapsed.current / 0.95, 0, 1)
+    if (elapsed.current < NEEDLE_CONTACT_DELAY) {
+      camera.position.copy(origin.current)
+      return
+    }
+    const progress = THREE.MathUtils.clamp(
+      (elapsed.current - NEEDLE_CONTACT_DELAY) / 0.95,
+      0,
+      1,
+    )
     const punch = Math.sin(progress * Math.PI)
     const intensity =
       result === 'BONE' ? 0.052 : result === 'NERVE' ? 0.038 : result === 'BLOOD' ? 0.026 : 0.014
     const shakeFade = 1 - progress
     const offset = new THREE.Vector3(
-      Math.sin(elapsed.current * 92) * intensity * shakeFade,
-      Math.cos(elapsed.current * 76) * intensity * shakeFade,
+      Math.sin((elapsed.current - NEEDLE_CONTACT_DELAY) * 92) * intensity * shakeFade,
+      Math.cos((elapsed.current - NEEDLE_CONTACT_DELAY) * 76) * intensity * shakeFade,
       0,
     )
     camera.position
@@ -1991,7 +2010,7 @@ export default function App() {
 
   useEffect(() => {
     if (!hit || showFeedback) return
-    const timer = window.setTimeout(() => setShowFeedback(true), 2800)
+    const timer = window.setTimeout(() => setShowFeedback(true), 3300)
     return () => window.clearTimeout(timer)
   }, [hit, showFeedback])
 
