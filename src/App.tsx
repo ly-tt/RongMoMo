@@ -1,4 +1,4 @@
-import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber'
+import { Canvas, ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -26,6 +26,7 @@ type Hit = {
   label: string
   rotation: THREE.Quaternion
   distance: number
+  stability: number
   correctSurface: boolean
   surfaceIssue: string | null
   result: NeedleResult
@@ -55,6 +56,14 @@ type PointerStart = {
   pointerId: number
   x: number
   y: number
+  startedAt: number
+}
+
+type NeedleChargeState = {
+  active: boolean
+  progress: number
+  cursor: number
+  stability: number
 }
 
 export type PatientState = {
@@ -93,6 +102,14 @@ type AiContentStatus = 'idle' | 'loading' | 'success' | 'fallback'
 
 const PALM_PIVOT = new THREE.Vector3(-5.3, 11.5, 1.3)
 const MAX_NEEDLES = 5
+const MIN_CHARGE_DURATION = 280
+const FULL_CHARGE_DURATION = 1250
+const EMPTY_CHARGE: NeedleChargeState = {
+  active: false,
+  progress: 0,
+  cursor: 0,
+  stability: 0,
+}
 const INITIAL_PATIENT_STATE: PatientState = {
   pain: 8,
   bruise: 0,
@@ -379,6 +396,15 @@ function applyNeedleResult(
   }
 }
 
+function getSuccessStreak(hits: Hit[]) {
+  let streak = 0
+  for (let index = hits.length - 1; index >= 0; index -= 1) {
+    if (hits[index].result !== 'SUCCESS') break
+    streak += 1
+  }
+  return streak
+}
+
 export function createLocalTreatmentSummary(
   patientState: PatientState,
   hits: Hit[],
@@ -498,8 +524,23 @@ const RESULT_COPY: Record<
   },
 }
 
+function getNeedleCharge(elapsedMs: number): NeedleChargeState {
+  const progress = THREE.MathUtils.clamp(elapsedMs / FULL_CHARGE_DURATION, 0, 1)
+  const cursor =
+    0.5 + Math.sin((elapsedMs / 1000) * Math.PI * 2.15 - Math.PI / 2) * 0.5
+  const centeredness = 1 - Math.abs(cursor - 0.5) * 2
+  const readiness = THREE.MathUtils.smoothstep(progress, 0.18, 0.48)
+  return {
+    active: true,
+    progress,
+    cursor,
+    stability: THREE.MathUtils.clamp(centeredness * readiness, 0, 1),
+  }
+}
+
 function classifyNeedleEvent({
   distance,
+  stability,
   dx,
   dy,
   correctSurface,
@@ -508,6 +549,7 @@ function classifyNeedleEvent({
   vascularDifficulty,
 }: {
   distance: number
+  stability: number
   dx: number
   dy: number
   correctSurface: boolean
@@ -515,10 +557,11 @@ function classifyNeedleEvent({
   sourcePoint: THREE.Vector3
   vascularDifficulty: number
 }): { result: NeedleResult; eventZone: EventZone } {
-  if (correctSurface && distance <= 0.82) {
+  const effectiveDistance = distance + (1 - stability) * 1.25
+  if (correctSurface && effectiveDistance <= 0.82) {
     return { result: 'SUCCESS', eventZone: 'ACUPOINT' }
   }
-  if (correctSurface && distance <= 1.45) {
+  if (correctSurface && effectiveDistance <= 1.45) {
     return { result: 'BRUISE', eventZone: 'SOFT_TISSUE' }
   }
 
@@ -1181,6 +1224,7 @@ function HitEffect({ hit }: { hit: Hit }) {
 
 function RealisticHand({
   onHit,
+  onChargeChange,
   disabled,
   target,
   activeResult,
@@ -1189,6 +1233,7 @@ function RealisticHand({
   treatmentStress,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  onChargeChange: (charge: NeedleChargeState) => void
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
@@ -1198,6 +1243,7 @@ function RealisticHand({
 }) {
   const { scene } = useGLTF('/models/hand.glb', false)
   const pointerStart = useRef<PointerStart | null>(null)
+  const lastChargeUpdate = useRef(0)
   const handGroup = useRef<THREE.Group>(null)
   const { hand } = useMemo(() => {
     const preparedHand = scene.clone(true)
@@ -1232,6 +1278,14 @@ function RealisticHand({
 
   useFrame(({ clock }) => {
     if (!handGroup.current) return
+    const chargingPointer = pointerStart.current
+    if (chargingPointer && !disabled) {
+      const now = performance.now()
+      if (now - lastChargeUpdate.current >= 32) {
+        lastChargeUpdate.current = now
+        onChargeChange(getNeedleCharge(now - chargingPointer.startedAt))
+      }
+    }
     const residualX = Math.sin(clock.elapsedTime * 7.3) * 0.024 * treatmentStress
     const residualY = Math.cos(clock.elapsedTime * 8.7) * 0.016 * treatmentStress
     handGroup.current.position.x = residualX
@@ -1251,21 +1305,47 @@ function RealisticHand({
   })
 
   const rememberPointer = (event: ThreeEvent<PointerEvent>) => {
+    if (disabled || !event.isPrimary) return
     pointerStart.current = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      startedAt: performance.now(),
     }
+    lastChargeUpdate.current = 0
+    onChargeChange(getNeedleCharge(0))
+  }
+
+  const trackPointer = (event: ThreeEvent<PointerEvent>) => {
+    const start = pointerStart.current
+    if (
+      !start ||
+      start.pointerId !== event.pointerId ||
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 11
+    ) {
+      return
+    }
+    pointerStart.current = null
+    onChargeChange(EMPTY_CHARGE)
+  }
+
+  const cancelCharge = () => {
+    pointerStart.current = null
+    onChargeChange(EMPTY_CHARGE)
   }
 
   const registerHit = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation()
     const start = pointerStart.current
     pointerStart.current = null
+    const elapsedMs = start ? performance.now() - start.startedAt : 0
+    const charge = getNeedleCharge(elapsedMs)
+    onChargeChange(EMPTY_CHARGE)
     if (
       disabled ||
       !start ||
       start.pointerId !== event.pointerId ||
+      elapsedMs < MIN_CHARGE_DURATION ||
       Math.hypot(event.clientX - start.x, event.clientY - start.y) > 9
     ) {
       return
@@ -1300,6 +1380,7 @@ function RealisticHand({
     )
     const { result, eventZone } = classifyNeedleEvent({
       distance,
+      stability: charge.stability,
       dx: sourcePoint.x - target.point.x,
       dy: sourcePoint.y - target.point.y,
       correctSurface,
@@ -1324,6 +1405,7 @@ function RealisticHand({
       label: `${side} · ${region}`,
       rotation: markerRotation,
       distance,
+      stability: charge.stability,
       correctSurface,
       surfaceIssue,
       result,
@@ -1337,10 +1419,9 @@ function RealisticHand({
       rotation={[-0.12, 0.08, -0.08]}
       scale={0.135}
       onPointerDown={rememberPointer}
+      onPointerMove={trackPointer}
       onPointerUp={registerHit}
-      onPointerCancel={() => {
-        pointerStart.current = null
-      }}
+      onPointerCancel={cancelCharge}
     >
       <primitive object={hand} />
       <TargetMarker target={target} />
@@ -1354,8 +1435,44 @@ function RealisticHand({
   )
 }
 
+function ImpactCamera({ result }: { result: NeedleResult }) {
+  const { camera } = useThree()
+  const origin = useRef(camera.position.clone())
+  const elapsed = useRef(0)
+
+  useEffect(() => {
+    const startPosition = origin.current.clone()
+    return () => {
+      camera.position.copy(startPosition)
+      camera.lookAt(0, 0, 0)
+    }
+  }, [camera])
+
+  useFrame((_, delta) => {
+    elapsed.current += delta
+    const progress = THREE.MathUtils.clamp(elapsed.current / 0.95, 0, 1)
+    const punch = Math.sin(progress * Math.PI)
+    const intensity =
+      result === 'BONE' ? 0.052 : result === 'NERVE' ? 0.038 : result === 'BLOOD' ? 0.026 : 0.014
+    const shakeFade = 1 - progress
+    const offset = new THREE.Vector3(
+      Math.sin(elapsed.current * 92) * intensity * shakeFade,
+      Math.cos(elapsed.current * 76) * intensity * shakeFade,
+      0,
+    )
+    camera.position
+      .copy(origin.current)
+      .multiplyScalar(1 - punch * 0.12)
+      .add(offset)
+    camera.lookAt(0, 0, 0)
+  })
+
+  return null
+}
+
 function Scene({
   onHit,
+  onChargeChange,
   hit,
   disabled,
   target,
@@ -1364,6 +1481,7 @@ function Scene({
   patientState,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  onChargeChange: (charge: NeedleChargeState) => void
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
@@ -1413,6 +1531,7 @@ function Scene({
       <Suspense fallback={null}>
         <RealisticHand
           onHit={onHit}
+          onChargeChange={onChargeChange}
           disabled={disabled}
           target={target}
           activeResult={hit?.result ?? null}
@@ -1423,6 +1542,7 @@ function Scene({
       </Suspense>
       {hit && (
         <>
+          <ImpactCamera result={hit.result} />
           <Needle hit={hit} />
           <HitEffect hit={hit} />
         </>
@@ -1734,6 +1854,7 @@ export default function App() {
     createInitialPatientState(patient),
   )
   const [showFeedback, setShowFeedback] = useState(false)
+  const [needleCharge, setNeedleCharge] = useState<NeedleChargeState>(EMPTY_CHARGE)
   const [showSummary, setShowSummary] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
@@ -1768,6 +1889,7 @@ export default function App() {
       result: item.result,
       distance: Number(item.distance.toFixed(1)),
       correctSurface: item.correctSurface,
+      stability: Math.round(item.stability * 100),
     }))
 
     setTreatmentSummary(null)
@@ -1820,6 +1942,7 @@ export default function App() {
     const nextHits = [...treatmentHits, recordedHit]
     const nextPatientState = applyNeedleResult(patientState, nextHit.result, patient)
     setNeedleCount(nextCount)
+    setNeedleCharge(EMPTY_CHARGE)
     setHit(recordedHit)
     setTreatmentHits(nextHits)
     setPatientState(nextPatientState)
@@ -1842,18 +1965,20 @@ export default function App() {
 
   useEffect(() => {
     if (!hit || showFeedback) return
-    const timer = window.setTimeout(() => setShowFeedback(true), 2400)
+    const timer = window.setTimeout(() => setShowFeedback(true), 2800)
     return () => window.clearTimeout(timer)
   }, [hit, showFeedback])
 
   const continueGame = () => {
     if (needleCount >= MAX_NEEDLES) {
       setHit(null)
+      setNeedleCharge(EMPTY_CHARGE)
       setShowFeedback(false)
       setShowSummary(true)
       return
     }
     setHit(null)
+    setNeedleCharge(EMPTY_CHARGE)
     setShowFeedback(false)
   }
 
@@ -1862,6 +1987,7 @@ export default function App() {
     setHit(null)
     setTreatmentHits([])
     setNeedleCount(0)
+    setNeedleCharge(EMPTY_CHARGE)
     setPatientState(createInitialPatientState(nextPatient))
     setShowFeedback(false)
     setShowSummary(false)
@@ -1957,6 +2083,13 @@ export default function App() {
   )
   const activeTarget = sessionTargets[targetIndex]
   const activeEffect = hit?.result.toLowerCase() ?? ''
+  const successStreak = getSuccessStreak(treatmentHits)
+  const chargeInstruction =
+    needleCharge.progress < 0.2
+      ? '继续按住'
+      : needleCharge.stability >= 0.72
+        ? '现在松手！'
+        : '等待绿色窗口'
 
   if (!started) {
     return (
@@ -1993,7 +2126,32 @@ export default function App() {
         treatmentStress >= 0.35 ? 'state-stressed' : ''
       }`}
     >
-      {hit && <div className="screen-effect" aria-hidden="true" />}
+      {hit && (
+        <div className="screen-effect" aria-hidden="true">
+          <div className="impact-burst" />
+          <div className="impact-speed-lines">
+            {Array.from({ length: 14 }, (_, index) => (
+              <i
+                key={index}
+                style={{
+                  '--ray-angle': `${index * (360 / 14)}deg`,
+                  '--ray-delay': `${index * 12}ms`,
+                } as React.CSSProperties}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {hit && !showFeedback && (
+        <div className="impact-callout" aria-live="assertive">
+          <span>{RESULT_COPY[hit.result].icon}</span>
+          <strong>{RESULT_COPY[hit.result].title}</strong>
+          <small>
+            稳定度 {Math.round(hit.stability * 100)}%
+            {hit.result === 'SUCCESS' && successStreak >= 2 ? ` · ${successStreak} COMBO` : ''}
+          </small>
+        </div>
+      )}
       <header className="topbar">
         <div>
           <p className="eyebrow">{patient.name} · {patient.personality}</p>
@@ -2007,7 +2165,10 @@ export default function App() {
 
       <PatientStatus state={patientState} />
 
-      <section className="scene-card" aria-label="寻找穴位并下针的三维手部模型">
+      <section
+        className={`scene-card ${needleCharge.active ? 'is-charging' : ''}`}
+        aria-label="寻找穴位并按住蓄针的三维手部模型"
+      >
         <Canvas
           shadows
           camera={{ position: [0, 0.25, 6.1], fov: 38 }}
@@ -2016,6 +2177,7 @@ export default function App() {
         >
           <Scene
             onHit={handleHit}
+            onChargeChange={setNeedleCharge}
             hit={hit}
             disabled={Boolean(hit)}
             target={activeTarget}
@@ -2040,23 +2202,35 @@ export default function App() {
 
         <div className="aim-tip">
           <i />
-          {hit ? '正在进针…' : '轻触绿色光圈下针'}
+          {hit ? '正在进针…' : needleCharge.active ? chargeInstruction : '按住穴位，稳定时松手'}
         </div>
 
-        {hit && !showFeedback && (
+        {needleCharge.active && !hit && (
           <div
-            className="insertion-status"
-            style={{ '--result-color': RESULT_COPY[hit.result].accent } as React.CSSProperties}
+            className={`charge-console ${needleCharge.stability >= 0.72 ? 'is-perfect' : ''}`}
+            style={{
+              '--charge-progress': `${needleCharge.progress * 100}%`,
+              '--charge-cursor': `${needleCharge.cursor * 100}%`,
+              '--charge-stability': `${needleCharge.stability * 100}%`,
+            } as React.CSSProperties}
           >
-            <span>{RESULT_COPY[hit.result].icon}</span>
-            针尖正在接触组织
+            <div className="charge-heading">
+              <span>稳定度</span>
+              <strong>{Math.round(needleCharge.stability * 100)}%</strong>
+            </div>
+            <div className="charge-track">
+              <span className="charge-sweet-spot" />
+              <i className="charge-cursor" />
+            </div>
+            <div className="charge-power"><i /></div>
+            <small>{chargeInstruction}</small>
           </div>
         )}
 
         <div className="gesture-guide" aria-hidden="true">
           <div><span className="gesture-icon">↔</span>拖动旋转</div>
           <div><span className="gesture-icon">↕</span>双指缩放</div>
-          <div><span className="gesture-icon">●</span>轻触下针</div>
+          <div><span className="gesture-icon">●</span>按住蓄针</div>
         </div>
       </section>
 
@@ -2120,6 +2294,10 @@ export default function App() {
             <div className="distance-row">
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
               <strong>{hit.correctSurface ? hit.distance.toFixed(1) : hit.surfaceIssue}</strong>
+            </div>
+            <div className="distance-row">
+              <span>操作稳定度</span>
+              <strong>{Math.round(hit.stability * 100)}%</strong>
             </div>
             {activeDelta && (
               <div className="state-delta" aria-label="本针状态变化">
