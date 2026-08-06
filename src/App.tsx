@@ -18,6 +18,7 @@ import {
 
 type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
+type GameMode = 'SIMPLE' | 'CHALLENGE'
 
 type Hit = {
   point: THREE.Vector3
@@ -1225,6 +1226,7 @@ function HitEffect({ hit }: { hit: Hit }) {
 function RealisticHand({
   onHit,
   onChargeChange,
+  gameMode,
   disabled,
   target,
   activeResult,
@@ -1234,6 +1236,7 @@ function RealisticHand({
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
+  gameMode: GameMode
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
@@ -1279,7 +1282,7 @@ function RealisticHand({
   useFrame(({ clock }) => {
     if (!handGroup.current) return
     const chargingPointer = pointerStart.current
-    if (chargingPointer && !disabled) {
+    if (chargingPointer && !disabled && gameMode === 'CHALLENGE') {
       const now = performance.now()
       if (now - lastChargeUpdate.current >= 32) {
         lastChargeUpdate.current = now
@@ -1313,7 +1316,9 @@ function RealisticHand({
       startedAt: performance.now(),
     }
     lastChargeUpdate.current = 0
-    onChargeChange(getNeedleCharge(0))
+    if (gameMode === 'CHALLENGE') {
+      onChargeChange(getNeedleCharge(0))
+    }
   }
 
   const trackPointer = (event: ThreeEvent<PointerEvent>) => {
@@ -1339,13 +1344,16 @@ function RealisticHand({
     const start = pointerStart.current
     pointerStart.current = null
     const elapsedMs = start ? performance.now() - start.startedAt : 0
-    const charge = getNeedleCharge(elapsedMs)
+    const charge =
+      gameMode === 'CHALLENGE'
+        ? getNeedleCharge(elapsedMs)
+        : { active: false, progress: 1, cursor: 0.5, stability: 1 }
     onChargeChange(EMPTY_CHARGE)
     if (
       disabled ||
       !start ||
       start.pointerId !== event.pointerId ||
-      elapsedMs < MIN_CHARGE_DURATION ||
+      (gameMode === 'CHALLENGE' && elapsedMs < MIN_CHARGE_DURATION) ||
       Math.hypot(event.clientX - start.x, event.clientY - start.y) > 9
     ) {
       return
@@ -1473,6 +1481,7 @@ function ImpactCamera({ result }: { result: NeedleResult }) {
 function Scene({
   onHit,
   onChargeChange,
+  gameMode,
   hit,
   disabled,
   target,
@@ -1482,6 +1491,7 @@ function Scene({
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
+  gameMode: GameMode
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
@@ -1532,6 +1542,7 @@ function Scene({
         <RealisticHand
           onHit={onHit}
           onChargeChange={onChargeChange}
+          gameMode={gameMode}
           disabled={disabled}
           target={target}
           activeResult={hit?.result ?? null}
@@ -1580,7 +1591,7 @@ function HomePage({
   patientLoading: boolean
   patientReady: boolean
   onRegenerate: () => void
-  onStart: () => void
+  onStart: (mode: GameMode) => void
 }) {
   return (
     <main className="home-shell">
@@ -1662,15 +1673,28 @@ function HomePage({
         )}
       </section>
 
-      <button
-        className="start-treatment"
-        type="button"
-        onClick={onStart}
-        disabled={!patientReady || patientLoading}
-      >
-        <span>开始疗程</span>
-        <small>{patientReady ? '共 5 针 · 约 2 分钟' : '正在准备患者'}</small>
-      </button>
+      <section className="mode-select" aria-label="选择游戏模式">
+        <button
+          className="mode-entry mode-entry-simple"
+          type="button"
+          onClick={() => onStart('SIMPLE')}
+          disabled={!patientReady || patientLoading}
+        >
+          <span>简单版</span>
+          <strong>轻触下针</strong>
+          <small>{patientReady ? '专注寻找穴位 · 适合初次体验' : '正在准备患者'}</small>
+        </button>
+        <button
+          className="mode-entry mode-entry-challenge"
+          type="button"
+          onClick={() => onStart('CHALLENGE')}
+          disabled={!patientReady || patientLoading}
+        >
+          <span>挑战版</span>
+          <strong>按住蓄针</strong>
+          <small>{patientReady ? '把握稳定窗口 · 结果更难控制' : '正在准备患者'}</small>
+        </button>
+      </section>
 
       <p className="home-disclaimer">
         {!patientReady
@@ -1847,6 +1871,7 @@ export default function App() {
   const [patientLoading, setPatientLoading] = useState(true)
   const [patientReady, setPatientReady] = useState(false)
   const [started, setStarted] = useState(false)
+  const [gameMode, setGameMode] = useState<GameMode>('SIMPLE')
   const [hit, setHit] = useState<Hit | null>(null)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
   const [needleCount, setNeedleCount] = useState(0)
@@ -1906,6 +1931,7 @@ export default function App() {
         }),
         stateJson: JSON.stringify({
           ...finalState,
+          gameMode,
           gameChallenge: {
             title: patientChallenge.title,
             description: patientChallenge.description,
@@ -2045,10 +2071,11 @@ export default function App() {
     }
   }
 
-  const startTreatment = () => {
+  const startTreatment = (mode: GameMode) => {
     if (patientLoading || !patientReady) return
     startedRef.current = true
     patientRequestId.current += 1
+    setGameMode(mode)
     setPatientLoading(false)
     resetTreatment(patient)
     setStarted(true)
@@ -2083,6 +2110,7 @@ export default function App() {
   )
   const activeTarget = sessionTargets[targetIndex]
   const activeEffect = hit?.result.toLowerCase() ?? ''
+  const isChallengeMode = gameMode === 'CHALLENGE'
   const successStreak = getSuccessStreak(treatmentHits)
   const chargeInstruction =
     needleCharge.progress < 0.2
@@ -2122,7 +2150,7 @@ export default function App() {
 
   return (
     <main
-      className={`app-shell ${hit ? `result-${activeEffect}` : ''} ${
+      className={`app-shell mode-${gameMode.toLowerCase()} ${hit ? `result-${activeEffect}` : ''} ${
         treatmentStress >= 0.35 ? 'state-stressed' : ''
       }`}
     >
@@ -2147,14 +2175,18 @@ export default function App() {
           <span>{RESULT_COPY[hit.result].icon}</span>
           <strong>{RESULT_COPY[hit.result].title}</strong>
           <small>
-            稳定度 {Math.round(hit.stability * 100)}%
+            {isChallengeMode
+              ? `稳定度 ${Math.round(hit.stability * 100)}%`
+              : '简单版 · 位置判定'}
             {hit.result === 'SUCCESS' && successStreak >= 2 ? ` · ${successStreak} COMBO` : ''}
           </small>
         </div>
       )}
       <header className="topbar">
         <div>
-          <p className="eyebrow">{patient.name} · {patient.personality}</p>
+          <p className="eyebrow">
+            {patient.name} · {patient.personality} · {isChallengeMode ? '挑战版' : '简单版'}
+          </p>
           <h1>一针见血？</h1>
         </div>
         <div className="needle-progress" aria-label={`第 ${Math.min(needleCount + 1, 5)} 针，共 5 针`}>
@@ -2178,6 +2210,7 @@ export default function App() {
           <Scene
             onHit={handleHit}
             onChargeChange={setNeedleCharge}
+            gameMode={gameMode}
             hit={hit}
             disabled={Boolean(hit)}
             target={activeTarget}
@@ -2202,10 +2235,16 @@ export default function App() {
 
         <div className="aim-tip">
           <i />
-          {hit ? '正在进针…' : needleCharge.active ? chargeInstruction : '按住穴位，稳定时松手'}
+          {hit
+            ? '正在进针…'
+            : isChallengeMode
+              ? needleCharge.active
+                ? chargeInstruction
+                : '按住穴位，稳定时松手'
+              : '轻触穴位直接下针'}
         </div>
 
-        {needleCharge.active && !hit && (
+        {isChallengeMode && needleCharge.active && !hit && (
           <div
             className={`charge-console ${needleCharge.stability >= 0.72 ? 'is-perfect' : ''}`}
             style={{
@@ -2230,7 +2269,10 @@ export default function App() {
         <div className="gesture-guide" aria-hidden="true">
           <div><span className="gesture-icon">↔</span>拖动旋转</div>
           <div><span className="gesture-icon">↕</span>双指缩放</div>
-          <div><span className="gesture-icon">●</span>按住蓄针</div>
+          <div>
+            <span className="gesture-icon">●</span>
+            {isChallengeMode ? '按住蓄针' : '轻触下针'}
+          </div>
         </div>
       </section>
 
@@ -2295,10 +2337,12 @@ export default function App() {
               <span>{hit.correctSurface ? '落点误差' : '落点表面'}</span>
               <strong>{hit.correctSurface ? hit.distance.toFixed(1) : hit.surfaceIssue}</strong>
             </div>
-            <div className="distance-row">
-              <span>操作稳定度</span>
-              <strong>{Math.round(hit.stability * 100)}%</strong>
-            </div>
+            {isChallengeMode && (
+              <div className="distance-row">
+                <span>操作稳定度</span>
+                <strong>{Math.round(hit.stability * 100)}%</strong>
+              </div>
+            )}
             {activeDelta && (
               <div className="state-delta" aria-label="本针状态变化">
                 {Object.entries(activeDelta)
