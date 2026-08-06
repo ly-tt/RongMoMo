@@ -8,6 +8,13 @@ import {
   type AiPatient,
   type AiPatientFingerprint,
 } from './services/aiService'
+import {
+  createPatientChallenge,
+  evaluatePatientChallenge,
+  getPatientReaction,
+  getTreatmentStress,
+  type PatientChallenge,
+} from './game/patientChallenge'
 
 type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
@@ -1179,6 +1186,7 @@ function RealisticHand({
   activeResult,
   treatmentHits,
   vascularDifficulty,
+  treatmentStress,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   disabled: boolean
@@ -1186,6 +1194,7 @@ function RealisticHand({
   activeResult: NeedleResult | null
   treatmentHits: Hit[]
   vascularDifficulty: number
+  treatmentStress: number
 }) {
   const { scene } = useGLTF('/models/hand.glb', false)
   const pointerStart = useRef<PointerStart | null>(null)
@@ -1223,6 +1232,10 @@ function RealisticHand({
 
   useFrame(({ clock }) => {
     if (!handGroup.current) return
+    const residualX = Math.sin(clock.elapsedTime * 7.3) * 0.024 * treatmentStress
+    const residualY = Math.cos(clock.elapsedTime * 8.7) * 0.016 * treatmentStress
+    handGroup.current.position.x = residualX
+    handGroup.current.position.y = residualY
     if (activeResult === 'NERVE') {
       handGroup.current.rotation.x = -0.12 + Math.sin(clock.elapsedTime * 48) * 0.035
       handGroup.current.rotation.z = -0.08 + Math.cos(clock.elapsedTime * 55) * 0.028
@@ -1230,8 +1243,10 @@ function RealisticHand({
       handGroup.current.rotation.x = -0.12 + Math.sin(clock.elapsedTime * 22) * 0.012
       handGroup.current.rotation.z = -0.08
     } else {
-      handGroup.current.rotation.x = -0.12
-      handGroup.current.rotation.z = -0.08
+      handGroup.current.rotation.x =
+        -0.12 + Math.sin(clock.elapsedTime * 6.8) * 0.007 * treatmentStress
+      handGroup.current.rotation.z =
+        -0.08 + Math.cos(clock.elapsedTime * 8.1) * 0.006 * treatmentStress
     }
   })
 
@@ -1346,6 +1361,7 @@ function Scene({
   target,
   treatmentHits,
   vascularDifficulty,
+  patientState,
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   hit: Hit | null
@@ -1353,7 +1369,11 @@ function Scene({
   target: NeedleTarget
   treatmentHits: Hit[]
   vascularDifficulty: number
+  patientState: PatientState
 }) {
+  const treatmentStress = getTreatmentStress(patientState)
+  const residualNumbIntensity = Math.max(0, patientState.numb - 35) * 0.12
+
   return (
     <>
       <color attach="background" args={['#080a12']} />
@@ -1384,6 +1404,12 @@ function Scene({
       />
       <pointLight position={[-4, 1, 2]} color="#7181ff" intensity={12} distance={8} />
       <pointLight position={[3.2, -0.6, 2.6]} color="#ff8aa5" intensity={10} distance={7} />
+      <pointLight
+        position={[0, 0.2, 2.1]}
+        color="#77a7ff"
+        intensity={residualNumbIntensity}
+        distance={5}
+      />
       <Suspense fallback={null}>
         <RealisticHand
           onHit={onHit}
@@ -1392,6 +1418,7 @@ function Scene({
           activeResult={hit?.result ?? null}
           treatmentHits={treatmentHits}
           vascularDifficulty={vascularDifficulty}
+          treatmentStress={treatmentStress}
         />
       </Suspense>
       {hit && (
@@ -1420,6 +1447,7 @@ function Scene({
 
 function HomePage({
   patient,
+  challenge,
   patientSource,
   patientLoading,
   patientReady,
@@ -1427,6 +1455,7 @@ function HomePage({
   onStart,
 }: {
   patient: PatientProfile
+  challenge: PatientChallenge
   patientSource: 'ai' | 'local'
   patientLoading: boolean
   patientReady: boolean
@@ -1478,6 +1507,16 @@ function HomePage({
                 <span>血管难度</span>
                 <strong>{patient.vascularDifficulty}</strong>
                 <i><b style={{ width: `${patient.vascularDifficulty}%` }} /></i>
+              </div>
+            </div>
+            <div
+              className="patient-challenge"
+              style={{ '--challenge-color': challenge.accent } as React.CSSProperties}
+            >
+              <span>本局挑战</span>
+              <div>
+                <strong>{challenge.title}</strong>
+                <small>{challenge.description}</small>
               </div>
             </div>
             {patientLoading && (
@@ -1558,6 +1597,7 @@ function TreatmentSummaryPage({
   patientState,
   hits,
   targets,
+  challenge,
   summary,
   summaryStatus,
   onRestart,
@@ -1566,6 +1606,7 @@ function TreatmentSummaryPage({
   patientState: PatientState
   hits: Hit[]
   targets: NeedleTarget[]
+  challenge: PatientChallenge
   summary: TreatmentSummary | null
   summaryStatus: AiContentStatus
   onRestart: () => void
@@ -1576,6 +1617,11 @@ function TreatmentSummaryPage({
   )
   const displaySummary = summary ?? localSummary
   const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
+  const challengeProgress = evaluatePatientChallenge(
+    challenge,
+    patientState,
+    hits,
+  )
 
   return (
     <main className="summary-shell">
@@ -1601,6 +1647,18 @@ function TreatmentSummaryPage({
           <small>
             {isAiLoading ? '百炼正在生成评价…' : displaySummary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
           </small>
+        </div>
+      </section>
+
+      <section
+        className={`challenge-result ${challengeProgress.completed ? 'is-complete' : 'is-failed'}`}
+        style={{ '--challenge-color': challenge.accent } as React.CSSProperties}
+      >
+        <span>{challengeProgress.completed ? '✓' : '!'}</span>
+        <div>
+          <p>本局挑战 · {challengeProgress.resultText}</p>
+          <strong>{challenge.title}</strong>
+          <small>{challengeProgress.progressText}</small>
         </div>
       </section>
 
@@ -1686,6 +1744,10 @@ export default function App() {
   const summaryRequestId = useRef(0)
   const startedRef = useRef(false)
   const patientHistoryRef = useRef<AiPatientFingerprint[]>([])
+  const patientChallenge = useMemo(
+    () => createPatientChallenge(patient),
+    [patient],
+  )
 
   const prepareTreatmentSummary = async (
     finalState: PatientState,
@@ -1695,6 +1757,11 @@ export default function App() {
     const requestId = summaryRequestId.current + 1
     summaryRequestId.current = requestId
     const localSummary = createLocalTreatmentSummary(finalState, finalHits, patient)
+    const finalChallengeProgress = evaluatePatientChallenge(
+      patientChallenge,
+      finalState,
+      finalHits,
+    )
     const records = finalHits.map((item, index) => ({
       index: item.needleNumber,
       acupoint: targets[index] ? `${targets[index].code} ${targets[index].name}` : item.label,
@@ -1715,7 +1782,15 @@ export default function App() {
           vascularDifficulty: patient.vascularDifficulty,
           personality: patient.personality,
         }),
-        stateJson: JSON.stringify(finalState),
+        stateJson: JSON.stringify({
+          ...finalState,
+          gameChallenge: {
+            title: patientChallenge.title,
+            description: patientChallenge.description,
+            completed: finalChallengeProgress.completed,
+            progress: finalChallengeProgress.progressText,
+          },
+        }),
         recordsJson: JSON.stringify(records),
       })
       if (summaryRequestId.current !== requestId) return
@@ -1867,6 +1942,15 @@ export default function App() {
 
   const feedback = hit ? RESULT_COPY[hit.result] : null
   const activeDelta = hit ? getPatientImpact(hit.result, patient) : null
+  const patientReaction = hit
+    ? getPatientReaction(patient, patientState, hit, treatmentHits)
+    : ''
+  const challengeProgress = evaluatePatientChallenge(
+    patientChallenge,
+    patientState,
+    treatmentHits,
+  )
+  const treatmentStress = getTreatmentStress(patientState)
   const targetIndex = Math.min(
     hit ? Math.max(needleCount - 1, 0) : needleCount,
     MAX_NEEDLES - 1,
@@ -1878,6 +1962,7 @@ export default function App() {
     return (
       <HomePage
         patient={patient}
+        challenge={patientChallenge}
         patientSource={patientSource}
         patientLoading={patientLoading}
         patientReady={patientReady}
@@ -1894,6 +1979,7 @@ export default function App() {
         patientState={patientState}
         hits={treatmentHits}
         targets={sessionTargets}
+        challenge={patientChallenge}
         summary={treatmentSummary}
         summaryStatus={summaryStatus}
         onRestart={restartTreatment}
@@ -1902,7 +1988,11 @@ export default function App() {
   }
 
   return (
-    <main className={`app-shell ${hit ? `result-${activeEffect}` : ''}`}>
+    <main
+      className={`app-shell ${hit ? `result-${activeEffect}` : ''} ${
+        treatmentStress >= 0.35 ? 'state-stressed' : ''
+      }`}
+    >
       {hit && <div className="screen-effect" aria-hidden="true" />}
       <header className="topbar">
         <div>
@@ -1931,12 +2021,21 @@ export default function App() {
             target={activeTarget}
             treatmentHits={treatmentHits}
             vascularDifficulty={patient.vascularDifficulty}
+            patientState={patientState}
           />
         </Canvas>
 
         <div className="scene-badge">
           <span>穴</span>
           目标：{activeTarget.code} · {activeTarget.name}
+        </div>
+
+        <div
+          className={`challenge-hud ${challengeProgress.currentlyPassing ? 'is-safe' : 'is-risk'}`}
+          style={{ '--challenge-color': patientChallenge.accent } as React.CSSProperties}
+        >
+          <span>挑战 · {patientChallenge.title}</span>
+          <strong>{challengeProgress.progressText}</strong>
         </div>
 
         <div className="aim-tip">
@@ -2000,6 +2099,10 @@ export default function App() {
             <p className="feedback-kicker">第 {hit.needleNumber} / {MAX_NEEDLES} 针</p>
             <h2 id="feedback-title">{feedback.title}</h2>
             <p>{feedback.message}</p>
+            <blockquote className="patient-reaction">
+              <span>{patient.name}</span>
+              “{patientReaction}”
+            </blockquote>
             <div className="knowledge-card">
               <strong>{activeTarget.code} · {activeTarget.name}</strong>
               <em>{activeTarget.meridian}</em>

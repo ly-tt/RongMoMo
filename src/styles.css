@@ -386,6 +386,48 @@ h1 {
   background: linear-gradient(90deg, #77a7ff, #ff436f);
 }
 
+.patient-challenge {
+  --challenge-color: #77a7ff;
+  margin-top: 14px;
+  padding: 10px 11px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--challenge-color) 22%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--challenge-color) 6%, transparent);
+}
+
+.patient-challenge > span {
+  padding: 5px 7px;
+  border-radius: 8px;
+  color: var(--challenge-color);
+  background: color-mix(in srgb, var(--challenge-color) 11%, transparent);
+  font-size: 8px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.patient-challenge > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.patient-challenge strong {
+  color: #e8e5df;
+  font-size: 10px;
+}
+
+.patient-challenge small {
+  overflow: hidden;
+  color: #828493;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .start-treatment {
   width: 100%;
   min-height: 58px;
@@ -530,6 +572,50 @@ h1 {
   border-radius: 50%;
   color: #f3f0e9;
   font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+.challenge-hud {
+  --challenge-color: #77a7ff;
+  position: absolute;
+  z-index: 2;
+  top: 58px;
+  left: 16px;
+  max-width: calc(100% - 32px);
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--challenge-color) 22%, transparent);
+  border-radius: 12px;
+  background: rgba(8, 10, 18, 0.7);
+  backdrop-filter: blur(10px);
+  transition: border-color 240ms ease, background 240ms ease;
+}
+
+.challenge-hud span {
+  color: var(--challenge-color);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.challenge-hud strong {
+  color: #d9d6d1;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+}
+
+.challenge-hud.is-risk {
+  border-color: rgba(255, 67, 111, 0.38);
+  background: rgba(44, 9, 20, 0.78);
+}
+
+.state-stressed .scene-card {
+  box-shadow:
+    0 26px 80px rgba(0, 0, 0, 0.28),
+    0 0 38px rgba(255, 67, 111, 0.08);
+}
+
+.state-stressed .aim-tip {
+  border-color: rgba(255, 138, 165, 0.26);
 }
 
 .aim-tip {
@@ -793,6 +879,25 @@ h1 {
   line-height: 1.65;
 }
 
+.patient-reaction {
+  margin: -7px 0 14px;
+  padding: 11px 12px;
+  border-left: 2px solid var(--result-color);
+  border-radius: 3px 12px 12px 3px;
+  color: #c7c4c2;
+  text-align: left;
+  background: color-mix(in srgb, var(--result-color) 6%, transparent);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.patient-reaction span {
+  margin-right: 6px;
+  color: var(--result-color);
+  font-size: 9px;
+  font-weight: 800;
+}
+
 .knowledge-card {
   margin: 0 0 14px;
   padding: 13px 14px;
@@ -1040,6 +1145,58 @@ h1 {
   font-size: 9px;
 }
 
+.challenge-result {
+  --challenge-color: #77a7ff;
+  margin-top: 12px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--challenge-color) 25%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--challenge-color) 6%, transparent);
+}
+
+.challenge-result > span {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #080a12;
+  background: var(--challenge-color);
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.challenge-result.is-failed {
+  --challenge-color: #ff668a !important;
+}
+
+.challenge-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.challenge-result p {
+  margin: 0;
+  color: var(--challenge-color);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.challenge-result strong {
+  font-size: 12px;
+}
+
+.challenge-result small {
+  color: #7d7f8e;
+  font-size: 9px;
+}
+
 .summary-shell > .patient-status {
   margin-top: 12px;
 }
@@ -1273,6 +1430,10 @@ h1 {
 }
 
 @media (max-height: 680px) {
+  .home-shell {
+    overflow-y: auto;
+  }
+
   .app-shell {
     grid-template-rows: auto auto minmax(280px, 1fr) auto;
     gap: 8px;
