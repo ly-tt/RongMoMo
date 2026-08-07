@@ -24,16 +24,6 @@ type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
 type GameMode = 'SIMPLE' | 'CHALLENGE'
 
-type GameScoreBreakdown = {
-  modelLanding: number
-  rhythm: number
-  resultBonus: number
-  assistPenalty: number
-  combo: number
-  comboBonus: number
-  total: number
-}
-
 type Hit = {
   point: THREE.Vector3
   localPoint: THREE.Vector3
@@ -47,12 +37,8 @@ type Hit = {
   result: NeedleResult
   eventZone: EventZone
   reaction: NeedleReaction
-  usedAssist: boolean
-  score: GameScoreBreakdown
   needleNumber: number
 }
-
-type HitInput = Omit<Hit, 'needleNumber' | 'score'>
 
 type NeedleTarget = {
   code: string
@@ -444,63 +430,6 @@ function getSuccessStreak(hits: Hit[]) {
   return streak
 }
 
-function calculateGameScore(
-  hit: HitInput,
-  previousHits: Hit[],
-  gameMode: GameMode,
-): GameScoreBreakdown {
-  const modelLanding = hit.correctSurface
-    ? Math.round(THREE.MathUtils.clamp(1 - hit.distance / 2.4, 0, 1) * 500)
-    : 0
-  const rhythm =
-    gameMode === 'CHALLENGE'
-      ? Math.round(hit.stability * 300)
-      : 180
-  const resultBonus: Record<NeedleResult, number> = {
-    SUCCESS: 200,
-    BRUISE: 80,
-    BLOOD: 50,
-    NERVE: 40,
-    BONE: 20,
-  }
-  const combo =
-    hit.result === 'SUCCESS'
-      ? getSuccessStreak(previousHits) + 1
-      : 0
-  const baseScore = modelLanding + rhythm + resultBonus[hit.result]
-  const comboRate = Math.min(Math.max(combo - 1, 0) * 0.15, 0.6)
-  const comboBonus = Math.round(baseScore * comboRate)
-  const assistPenalty = hit.usedAssist ? -150 : 0
-
-  return {
-    modelLanding,
-    rhythm,
-    resultBonus: resultBonus[hit.result],
-    assistPenalty,
-    combo,
-    comboBonus,
-    total: Math.max(0, baseScore + comboBonus + assistPenalty),
-  }
-}
-
-function summarizeGameScores(hits: Hit[]) {
-  return {
-    total: hits.reduce((sum, item) => sum + item.score.total, 0),
-    modelLanding: hits.reduce((sum, item) => sum + item.score.modelLanding, 0),
-    rhythm: hits.reduce((sum, item) => sum + item.score.rhythm, 0),
-    resultBonus: hits.reduce((sum, item) => sum + item.score.resultBonus, 0),
-    assistPenalty: hits.reduce((sum, item) => sum + item.score.assistPenalty, 0),
-    comboBonus: hits.reduce((sum, item) => sum + item.score.comboBonus, 0),
-    maxCombo: hits.reduce((max, item) => Math.max(max, item.score.combo), 0),
-    assistCount: hits.filter((item) => item.usedAssist).length,
-    averageStability: hits.length
-      ? Math.round(
-          (hits.reduce((sum, item) => sum + item.stability, 0) / hits.length) * 100,
-        )
-      : 0,
-  }
-}
-
 export function createLocalTreatmentSummary(
   patientState: PatientState,
   hits: Hit[],
@@ -694,43 +623,165 @@ function classifyNeedleEvent({
   return { result: 'BONE', eventZone: 'HARD_TISSUE' }
 }
 
-function playNeedleSound(result: NeedleResult) {
+function playNeedleSound(result: NeedleResult, combo = 0) {
   const AudioContextClass =
     window.AudioContext ??
     (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!AudioContextClass) return
 
   const context = new AudioContextClass()
+  void context.resume()
+  const now = context.currentTime
   const master = context.createGain()
-  master.gain.setValueAtTime(0.0001, context.currentTime)
-  master.gain.exponentialRampToValueAtTime(0.15, context.currentTime + 0.015)
-  master.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.72)
-  master.connect(context.destination)
+  const compressor = context.createDynamicsCompressor()
+  master.gain.setValueAtTime(0.0001, now)
+  master.gain.exponentialRampToValueAtTime(0.34, now + 0.012)
+  master.gain.setValueAtTime(0.34, now + 0.9)
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.45)
+  compressor.threshold.value = -16
+  compressor.knee.value = 18
+  compressor.ratio.value = 5
+  compressor.attack.value = 0.003
+  compressor.release.value = 0.2
+  master.connect(compressor)
+  compressor.connect(context.destination)
 
-  const tones: Record<NeedleResult, Array<[number, number, OscillatorType]>> = {
-    SUCCESS: [[440, 660, 'sine']],
-    BLOOD: [[150, 85, 'sine'], [220, 120, 'triangle']],
-    NERVE: [[920, 1680, 'square'], [1380, 720, 'sawtooth']],
-    BRUISE: [[180, 110, 'sine']],
-    BONE: [[1450, 620, 'triangle'], [2100, 1100, 'sine']],
-  }
-
-  tones[result].forEach(([startFrequency, endFrequency, type], index) => {
+  const tone = ({
+    start = 0,
+    duration,
+    from,
+    to = from,
+    type = 'sine',
+    volume,
+  }: {
+    start?: number
+    duration: number
+    from: number
+    to?: number
+    type?: OscillatorType
+    volume: number
+  }) => {
     const oscillator = context.createOscillator()
     const gain = context.createGain()
-    const start = context.currentTime + index * 0.035
+    const startsAt = now + start
     oscillator.type = type
-    oscillator.frequency.setValueAtTime(startFrequency, start)
-    oscillator.frequency.exponentialRampToValueAtTime(endFrequency, start + 0.38)
-    gain.gain.setValueAtTime(index === 0 ? 0.7 : 0.32, start)
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.48)
+    oscillator.frequency.setValueAtTime(from, startsAt)
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, to), startsAt + duration)
+    gain.gain.setValueAtTime(0.0001, startsAt)
+    gain.gain.exponentialRampToValueAtTime(volume, startsAt + Math.min(0.012, duration * 0.18))
+    gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration)
     oscillator.connect(gain)
     gain.connect(master)
-    oscillator.start(start)
-    oscillator.stop(start + 0.5)
-  })
+    oscillator.start(startsAt)
+    oscillator.stop(startsAt + duration + 0.02)
+  }
 
-  window.setTimeout(() => void context.close(), 900)
+  const noise = ({
+    start = 0,
+    duration,
+    volume,
+    filterType,
+    frequency,
+  }: {
+    start?: number
+    duration: number
+    volume: number
+    filterType: BiquadFilterType
+    frequency: number
+  }) => {
+    const frameCount = Math.ceil(context.sampleRate * duration)
+    const buffer = context.createBuffer(1, frameCount, context.sampleRate)
+    const data = buffer.getChannelData(0)
+    for (let index = 0; index < frameCount; index += 1) {
+      data[index] = (Math.random() * 2 - 1) * (1 - index / frameCount)
+    }
+    const source = context.createBufferSource()
+    const filter = context.createBiquadFilter()
+    const gain = context.createGain()
+    const startsAt = now + start
+    source.buffer = buffer
+    filter.type = filterType
+    filter.frequency.setValueAtTime(frequency, startsAt)
+    gain.gain.setValueAtTime(volume, startsAt)
+    gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration)
+    source.connect(filter)
+    filter.connect(gain)
+    gain.connect(master)
+    source.start(startsAt)
+  }
+
+  if (result === 'SUCCESS') {
+    const notes = [440, 554.37, 659.25, 880, 1108.73]
+    const noteCount = Math.min(2 + Math.max(combo, 1), notes.length)
+    notes.slice(0, noteCount).forEach((frequency, index) => {
+      tone({
+        start: index * 0.075,
+        duration: 0.62,
+        from: frequency,
+        to: frequency * 1.015,
+        type: index % 2 ? 'triangle' : 'sine',
+        volume: 0.28 - index * 0.025,
+      })
+    })
+    noise({ start: 0.04, duration: 0.22, volume: 0.055, filterType: 'highpass', frequency: 4200 })
+  } else if (result === 'BLOOD') {
+    tone({ duration: 0.42, from: 105, to: 48, volume: 0.58 })
+    tone({ start: 0.09, duration: 0.32, from: 245, to: 78, type: 'triangle', volume: 0.34 })
+    tone({ start: 0.24, duration: 0.3, from: 190, to: 65, volume: 0.3 })
+    noise({ duration: 0.48, volume: 0.19, filterType: 'lowpass', frequency: 760 })
+  } else if (result === 'NERVE') {
+    Array.from({ length: 7 }, (_, index) => {
+      tone({
+        start: index * 0.055,
+        duration: 0.095,
+        from: index % 2 ? 1780 : 980,
+        to: index % 2 ? 720 : 2240,
+        type: index % 2 ? 'square' : 'sawtooth',
+        volume: 0.18,
+      })
+    })
+    tone({ start: 0.06, duration: 0.54, from: 620, to: 1320, type: 'triangle', volume: 0.2 })
+    noise({ duration: 0.46, volume: 0.1, filterType: 'highpass', frequency: 2600 })
+  } else if (result === 'BRUISE') {
+    tone({ duration: 0.46, from: 148, to: 52, volume: 0.62 })
+    tone({ start: 0.08, duration: 0.62, from: 82, to: 42, volume: 0.42 })
+    noise({ duration: 0.26, volume: 0.16, filterType: 'lowpass', frequency: 420 })
+  } else {
+    tone({ duration: 0.18, from: 2400, to: 760, type: 'triangle', volume: 0.42 })
+    tone({ start: 0.018, duration: 0.34, from: 1650, to: 520, type: 'square', volume: 0.22 })
+    tone({ start: 0.06, duration: 0.72, from: 186, to: 92, volume: 0.32 })
+    noise({ duration: 0.11, volume: 0.28, filterType: 'highpass', frequency: 3100 })
+  }
+
+  window.setTimeout(() => void context.close(), 1700)
+}
+
+function playInterfaceSound(kind: 'start' | 'continue' | 'toggle') {
+  const AudioContextClass =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!AudioContextClass) return
+
+  const context = new AudioContextClass()
+  const oscillator = context.createOscillator()
+  const gain = context.createGain()
+  const now = context.currentTime
+  const frequencies = {
+    start: [330, 660],
+    continue: [520, 700],
+    toggle: [440, 560],
+  } as const
+  oscillator.type = kind === 'start' ? 'triangle' : 'sine'
+  oscillator.frequency.setValueAtTime(frequencies[kind][0], now)
+  oscillator.frequency.exponentialRampToValueAtTime(frequencies[kind][1], now + 0.13)
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.012)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18)
+  oscillator.connect(gain)
+  gain.connect(context.destination)
+  oscillator.start(now)
+  oscillator.stop(now + 0.2)
+  window.setTimeout(() => void context.close(), 320)
 }
 
 function keepLeftHand(mesh: THREE.Mesh) {
@@ -791,13 +842,7 @@ function classifyHandRegion(point: THREE.Vector3) {
   return `${finger.name} · 近节`
 }
 
-function TargetMarker({
-  target,
-  assisted,
-}: {
-  target: NeedleTarget
-  assisted: boolean
-}) {
+function TargetMarker({ target }: { target: NeedleTarget }) {
   const pulse = useRef<THREE.Group>(null)
   const markerPosition = useMemo(
     () => target.point.clone().addScaledVector(target.normal, 0.42).sub(PALM_PIVOT),
@@ -814,9 +859,7 @@ function TargetMarker({
 
   useFrame(({ clock }) => {
     if (!pulse.current) return
-    const scale =
-      (assisted ? 1.72 : 1) +
-      Math.sin(clock.elapsedTime * (assisted ? 5.2 : 3.4)) * (assisted ? 0.2 : 0.12)
+    const scale = 1 + Math.sin(clock.elapsedTime * 3.4) * 0.12
     pulse.current.scale.setScalar(scale)
   })
 
@@ -826,9 +869,9 @@ function TargetMarker({
         <mesh>
           <ringGeometry args={[0.48, 0.72, 48]} />
           <meshBasicMaterial
-            color={assisted ? '#c8ffe8' : '#74f1bc'}
+            color="#74f1bc"
             transparent
-            opacity={assisted ? 1 : 0.8}
+            opacity={0.8}
             depthTest
             polygonOffset
             polygonOffsetFactor={-4}
@@ -850,20 +893,6 @@ function TargetMarker({
             toneMapped={false}
           />
         </mesh>
-        {assisted && (
-          <mesh>
-            <ringGeometry args={[0.8, 0.92, 64]} />
-            <meshBasicMaterial
-              color="#67edb0"
-              transparent
-              opacity={0.45}
-              depthTest
-              depthWrite={false}
-              toneMapped={false}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
-        )}
       </group>
     </group>
   )
@@ -1354,7 +1383,6 @@ function RealisticHand({
   onHit,
   onChargeChange,
   gameMode,
-  assisted,
   disabled,
   target,
   activeResult,
@@ -1362,10 +1390,9 @@ function RealisticHand({
   vascularDifficulty,
   treatmentStress,
 }: {
-  onHit: (hit: HitInput) => void
+  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
   gameMode: GameMode
-  assisted: boolean
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
@@ -1564,7 +1591,6 @@ function RealisticHand({
       result,
       eventZone,
       reaction,
-      usedAssist: assisted,
     })
   }
 
@@ -1579,7 +1605,7 @@ function RealisticHand({
       onPointerCancel={cancelCharge}
     >
       <primitive object={hand} />
-      <TargetMarker target={target} assisted={assisted} />
+      <TargetMarker target={target} />
       {treatmentHits.map((pastHit) => (
         <PersistentMark
           key={`${pastHit.needleNumber}-${pastHit.localPoint.toArray().join('-')}`}
@@ -1637,7 +1663,6 @@ function Scene({
   onHit,
   onChargeChange,
   gameMode,
-  assisted,
   hit,
   disabled,
   target,
@@ -1645,10 +1670,9 @@ function Scene({
   vascularDifficulty,
   patientState,
 }: {
-  onHit: (hit: HitInput) => void
+  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
   gameMode: GameMode
-  assisted: boolean
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
@@ -1700,7 +1724,6 @@ function Scene({
           onHit={onHit}
           onChargeChange={onChargeChange}
           gameMode={gameMode}
-          assisted={assisted}
           disabled={disabled}
           target={target}
           activeResult={hit?.result ?? null}
@@ -1919,7 +1942,6 @@ function TreatmentSummaryPage({
   )
   const displaySummary = summary ?? localSummary
   const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
-  const gameScore = summarizeGameScores(hits)
   const challengeProgress = evaluatePatientChallenge(
     challenge,
     patientState,
@@ -1951,25 +1973,6 @@ function TreatmentSummaryPage({
             {isAiLoading ? '百炼正在生成评价…' : displaySummary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
           </small>
         </div>
-      </section>
-
-      <section className="game-score-summary">
-        <div className="game-score-total">
-          <span>本局娱乐分</span>
-          <strong>{gameScore.total}</strong>
-          <small>GAME SCORE</small>
-        </div>
-        <div className="game-score-breakdown">
-          <span><small>模型落点</small><strong>{gameScore.modelLanding}</strong></span>
-          <span><small>操作节奏</small><strong>{gameScore.rhythm}</strong></span>
-          <span><small>游戏结果</small><strong>{gameScore.resultBonus}</strong></span>
-          <span><small>Combo 奖励</small><strong>+{gameScore.comboBonus}</strong></span>
-          <span><small>辅助扣分</small><strong>{gameScore.assistPenalty}</strong></span>
-          <span><small>最高 Combo</small><strong>{gameScore.maxCombo}</strong></span>
-        </div>
-        <p>
-          以下评分仅依据当前 3D 模型内预设坐标与游戏规则，不代表真实穴位定位、针刺水平、医学训练结果或医疗结论。
-        </p>
       </section>
 
       <section
@@ -2025,8 +2028,6 @@ function TreatmentSummaryPage({
                   {copy.title} → {item.reaction.title} · {item.correctSurface
                     ? `模型距离 ${item.distance.toFixed(1)}`
                     : item.surfaceIssue}
-                  {` · +${item.score.total} 娱乐分`}
-                  {item.score.combo >= 2 ? ` · ${item.score.combo} Combo` : ''}
                 </small>
               </div>
             </article>
@@ -2043,7 +2044,7 @@ function TreatmentSummaryPage({
           : displaySummary.source === 'ai'
             ? '本次趣味对白由阿里云百炼生成。'
             : 'AI 暂不可用，已自动切换到本地总结。'}
-        内容仅作娱乐与游戏科普，不构成医学建议；娱乐分与现实能力无关。
+        内容仅作娱乐与游戏科普，不构成医学建议。
       </p>
     </main>
   )
@@ -2064,7 +2065,7 @@ export default function App() {
   )
   const [showFeedback, setShowFeedback] = useState(false)
   const [needleCharge, setNeedleCharge] = useState<NeedleChargeState>(EMPTY_CHARGE)
-  const [assistEnabled, setAssistEnabled] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
   const [showSummary, setShowSummary] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
@@ -2103,11 +2104,7 @@ export default function App() {
       distance: Number(item.distance.toFixed(1)),
       correctSurface: item.correctSurface,
       stability: Math.round(item.stability * 100),
-      entertainmentScore: item.score.total,
-      combo: item.score.combo,
-      usedGameAssist: item.usedAssist,
     }))
-    const gameScore = summarizeGameScores(finalHits)
 
     setTreatmentSummary(null)
     setSummaryStatus('loading')
@@ -2124,9 +2121,6 @@ export default function App() {
         stateJson: JSON.stringify({
           ...finalState,
           gameMode,
-          entertainmentScore: gameScore,
-          scoringDisclaimer:
-            '仅依据当前3D模型预设坐标与游戏规则，不代表真实穴位定位、针刺水平、医学训练结果或医疗结论。',
           gameChallenge: {
             title: patientChallenge.title,
             description: patientChallenge.description,
@@ -2156,15 +2150,10 @@ export default function App() {
     }
   }
 
-  const handleHit = (nextHit: HitInput) => {
+  const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
     if (hit || needleCount >= MAX_NEEDLES) return
     const nextCount = needleCount + 1
-    const score = calculateGameScore(nextHit, treatmentHits, gameMode)
-    const recordedHit: Hit = {
-      ...nextHit,
-      score,
-      needleNumber: nextCount,
-    }
+    const recordedHit = { ...nextHit, needleNumber: nextCount }
     const nextHits = [...treatmentHits, recordedHit]
     const nextPatientState = applyNeedleResult(
       patientState,
@@ -2174,7 +2163,6 @@ export default function App() {
     )
     setNeedleCount(nextCount)
     setNeedleCharge(EMPTY_CHARGE)
-    setAssistEnabled(false)
     setHit(recordedHit)
     setTreatmentHits(nextHits)
     setPatientState(nextPatientState)
@@ -2182,7 +2170,13 @@ export default function App() {
     if (nextCount === MAX_NEEDLES) {
       void prepareTreatmentSummary(nextPatientState, nextHits, sessionTargets)
     }
-    playNeedleSound(nextHit.result)
+    if (soundEnabled) {
+      const combo =
+        nextHit.result === 'SUCCESS'
+          ? getSuccessStreak(treatmentHits) + 1
+          : 0
+      playNeedleSound(nextHit.result, combo)
+    }
     if ('vibrate' in navigator) {
       const vibrationPatterns: Record<NeedleResult, number | number[]> = {
         SUCCESS: 35,
@@ -2202,6 +2196,7 @@ export default function App() {
   }, [hit, showFeedback])
 
   const continueGame = () => {
+    if (soundEnabled) playInterfaceSound('continue')
     if (needleCount >= MAX_NEEDLES) {
       setHit(null)
       setNeedleCharge(EMPTY_CHARGE)
@@ -2211,7 +2206,6 @@ export default function App() {
     }
     setHit(null)
     setNeedleCharge(EMPTY_CHARGE)
-    setAssistEnabled(false)
     setShowFeedback(false)
   }
 
@@ -2221,7 +2215,6 @@ export default function App() {
     setTreatmentHits([])
     setNeedleCount(0)
     setNeedleCharge(EMPTY_CHARGE)
-    setAssistEnabled(false)
     setPatientState(createInitialPatientState(nextPatient))
     setShowFeedback(false)
     setShowSummary(false)
@@ -2281,6 +2274,7 @@ export default function App() {
 
   const startTreatment = (mode: GameMode) => {
     if (patientLoading || !patientReady) return
+    if (soundEnabled) playInterfaceSound('start')
     startedRef.current = true
     patientRequestId.current += 1
     setGameMode(mode)
@@ -2328,7 +2322,6 @@ export default function App() {
     : ''
   const isChallengeMode = gameMode === 'CHALLENGE'
   const successStreak = getSuccessStreak(treatmentHits)
-  const liveGameScore = summarizeGameScores(treatmentHits)
   const chargeInstruction =
     needleCharge.progress < 0.2
       ? '继续按住'
@@ -2399,8 +2392,7 @@ export default function App() {
             {hit.reaction.classification} · {isChallengeMode
               ? `稳定度 ${Math.round(hit.stability * 100)}%`
               : '简单版 · 位置判定'}
-            {hit.score.combo >= 2 ? ` · ${hit.score.combo} COMBO` : ''}
-            {` · +${hit.score.total} 娱乐分`}
+            {hit.result === 'SUCCESS' && successStreak >= 2 ? ` · ${successStreak} COMBO` : ''}
           </small>
         </div>
       )}
@@ -2411,9 +2403,24 @@ export default function App() {
           </p>
           <h1>一针见血？</h1>
         </div>
-        <div className="needle-progress" aria-label={`第 ${Math.min(needleCount + 1, 5)} 针，共 5 针`}>
-          <strong>{needleCount >= MAX_NEEDLES ? '完成' : `第 ${needleCount + 1} 针`}</strong>
-          <span>/ 5</span>
+        <div className="topbar-actions">
+          <button
+            className="sound-toggle"
+            type="button"
+            aria-pressed={soundEnabled}
+            aria-label={soundEnabled ? '关闭音效' : '开启音效'}
+            onClick={() => {
+              if (!soundEnabled) playInterfaceSound('toggle')
+              setSoundEnabled((enabled) => !enabled)
+            }}
+          >
+            <span>{soundEnabled ? '🔊' : '🔇'}</span>
+            音效
+          </button>
+          <div className="needle-progress" aria-label={`第 ${Math.min(needleCount + 1, 5)} 针，共 5 针`}>
+            <strong>{needleCount >= MAX_NEEDLES ? '完成' : `第 ${needleCount + 1} 针`}</strong>
+            <span>/ 5</span>
+          </div>
         </div>
       </header>
 
@@ -2433,7 +2440,6 @@ export default function App() {
             onHit={handleHit}
             onChargeChange={setNeedleCharge}
             gameMode={gameMode}
-            assisted={assistEnabled}
             hit={hit}
             disabled={Boolean(hit)}
             target={activeTarget}
@@ -2446,12 +2452,6 @@ export default function App() {
         <div className="scene-badge">
           <span>穴</span>
           目标：{activeTarget.code} · {activeTarget.name}
-        </div>
-
-        <div className="game-score-hud" aria-label={`当前娱乐分 ${liveGameScore.total}`}>
-          <span>娱乐分</span>
-          <strong>{liveGameScore.total}</strong>
-          <small>{successStreak >= 2 ? `${successStreak} COMBO` : 'GAME ONLY'}</small>
         </div>
 
         <div
@@ -2517,28 +2517,17 @@ export default function App() {
               : `快速找：${activeTarget.quickLocation}`}
           </p>
         </div>
-        <div className="control-actions">
-          <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
-            {Array.from({ length: MAX_NEEDLES }, (_, index) => (
-              <span
-                key={index}
-                className={
-                  treatmentHits[index]
-                    ? `done ${treatmentHits[index].result.toLowerCase()}`
-                    : ''
-                }
-              />
-            ))}
-          </div>
-          <button
-            className={`assist-button ${assistEnabled ? 'is-active' : ''}`}
-            type="button"
-            disabled={Boolean(hit) || assistEnabled}
-            onClick={() => setAssistEnabled(true)}
-          >
-            {assistEnabled ? '标记已增强' : '增强游戏标记 · -150'}
-          </button>
-          <small className="assist-caption">只放大现有标记，不代表真实定点</small>
+        <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
+          {Array.from({ length: MAX_NEEDLES }, (_, index) => (
+            <span
+              key={index}
+              className={
+                treatmentHits[index]
+                  ? `done ${treatmentHits[index].result.toLowerCase()}`
+                  : ''
+              }
+            />
+          ))}
         </div>
       </footer>
 
@@ -2587,17 +2576,6 @@ export default function App() {
                 <strong>{Math.round(hit.stability * 100)}%</strong>
               </div>
             )}
-            <div className="needle-score-card">
-              <div>
-                <span>本针娱乐分</span>
-                <strong>+{hit.score.total}</strong>
-              </div>
-              <small>
-                模型落点 {hit.score.modelLanding} · 操作节奏 {hit.score.rhythm} · 游戏结果 {hit.score.resultBonus}
-                {hit.score.comboBonus > 0 ? ` · Combo +${hit.score.comboBonus}` : ''}
-                {hit.score.assistPenalty < 0 ? ` · 辅助 ${hit.score.assistPenalty}` : ''}
-              </small>
-            </div>
             {activeDelta && (
               <div className="state-delta" aria-label="本针状态变化">
                 {Object.entries(activeDelta)
