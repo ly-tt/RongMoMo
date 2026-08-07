@@ -24,6 +24,16 @@ type NeedleResult = 'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE'
 type EventZone = 'ACUPOINT' | 'CAPILLARY' | 'NERVE_PATH' | 'SOFT_TISSUE' | 'HARD_TISSUE'
 type GameMode = 'SIMPLE' | 'CHALLENGE'
 
+type GameScoreBreakdown = {
+  modelLanding: number
+  rhythm: number
+  resultBonus: number
+  assistPenalty: number
+  combo: number
+  comboBonus: number
+  total: number
+}
+
 type Hit = {
   point: THREE.Vector3
   localPoint: THREE.Vector3
@@ -37,8 +47,12 @@ type Hit = {
   result: NeedleResult
   eventZone: EventZone
   reaction: NeedleReaction
+  usedAssist: boolean
+  score: GameScoreBreakdown
   needleNumber: number
 }
+
+type HitInput = Omit<Hit, 'needleNumber' | 'score'>
 
 type NeedleTarget = {
   code: string
@@ -430,6 +444,63 @@ function getSuccessStreak(hits: Hit[]) {
   return streak
 }
 
+function calculateGameScore(
+  hit: HitInput,
+  previousHits: Hit[],
+  gameMode: GameMode,
+): GameScoreBreakdown {
+  const modelLanding = hit.correctSurface
+    ? Math.round(THREE.MathUtils.clamp(1 - hit.distance / 2.4, 0, 1) * 500)
+    : 0
+  const rhythm =
+    gameMode === 'CHALLENGE'
+      ? Math.round(hit.stability * 300)
+      : 180
+  const resultBonus: Record<NeedleResult, number> = {
+    SUCCESS: 200,
+    BRUISE: 80,
+    BLOOD: 50,
+    NERVE: 40,
+    BONE: 20,
+  }
+  const combo =
+    hit.result === 'SUCCESS'
+      ? getSuccessStreak(previousHits) + 1
+      : 0
+  const baseScore = modelLanding + rhythm + resultBonus[hit.result]
+  const comboRate = Math.min(Math.max(combo - 1, 0) * 0.15, 0.6)
+  const comboBonus = Math.round(baseScore * comboRate)
+  const assistPenalty = hit.usedAssist ? -150 : 0
+
+  return {
+    modelLanding,
+    rhythm,
+    resultBonus: resultBonus[hit.result],
+    assistPenalty,
+    combo,
+    comboBonus,
+    total: Math.max(0, baseScore + comboBonus + assistPenalty),
+  }
+}
+
+function summarizeGameScores(hits: Hit[]) {
+  return {
+    total: hits.reduce((sum, item) => sum + item.score.total, 0),
+    modelLanding: hits.reduce((sum, item) => sum + item.score.modelLanding, 0),
+    rhythm: hits.reduce((sum, item) => sum + item.score.rhythm, 0),
+    resultBonus: hits.reduce((sum, item) => sum + item.score.resultBonus, 0),
+    assistPenalty: hits.reduce((sum, item) => sum + item.score.assistPenalty, 0),
+    comboBonus: hits.reduce((sum, item) => sum + item.score.comboBonus, 0),
+    maxCombo: hits.reduce((max, item) => Math.max(max, item.score.combo), 0),
+    assistCount: hits.filter((item) => item.usedAssist).length,
+    averageStability: hits.length
+      ? Math.round(
+          (hits.reduce((sum, item) => sum + item.stability, 0) / hits.length) * 100,
+        )
+      : 0,
+  }
+}
+
 export function createLocalTreatmentSummary(
   patientState: PatientState,
   hits: Hit[],
@@ -454,7 +525,7 @@ export function createLocalTreatmentSummary(
       satisfaction,
       rating: 5,
       title: '稳准轻，患者很买账',
-      review: `${successCount} 针命中穴位，整段疗程节奏稳定，几乎没有让患者产生警惕。`,
+      review: `${successCount} 次命中当前模型目标，整段游戏节奏稳定，几乎没有让患者产生警惕。`,
       dialog: `${patient.name}：“原来针灸也可以这么轻松，下次还找你。”`,
       source: 'local',
     }
@@ -477,7 +548,7 @@ export function createLocalTreatmentSummary(
       rating: 3,
       title: '疗程完成，气氛有点微妙',
       review: nerveCount
-        ? `神经刺激出现 ${nerveCount} 次，麻木和疼痛累积明显，精准度仍需提升。`
+        ? `神经刺激出现 ${nerveCount} 次，麻木和疼痛累积明显，本局模型落点分仍可提升。`
         : '偏针事件较多，患者全程盯着你的手，信任值勉强保住。',
       dialog: `${patient.name}：“我相信你……但我的手好像有自己的意见。”`,
       source: 'local',
@@ -490,7 +561,7 @@ export function createLocalTreatmentSummary(
     review:
       boneCount > 0
         ? `硬组织刺激出现 ${boneCount} 次，疼痛和信任损失成为本次疗程的主要问题。`
-        : '多项状态已经进入高压区，这一局的首要任务不是追求得气，而是重新找准位置。',
+        : '多项状态已经进入高压区，这一局的首要任务是重新观察当前游戏标记。',
     dialog: `${patient.name}：“下次见面……我们还是先握个手吧。”`,
     source: 'local',
   }
@@ -509,7 +580,7 @@ const RESULT_COPY: Record<
 > = {
   SUCCESS: {
     icon: '◎',
-    title: '精准命中',
+    title: '模型目标命中',
     message: '局部出现酸、胀、沉、重或麻的“得气感”。',
     accent: '#67edb0',
     zone: '目标穴位',
@@ -720,7 +791,13 @@ function classifyHandRegion(point: THREE.Vector3) {
   return `${finger.name} · 近节`
 }
 
-function TargetMarker({ target }: { target: NeedleTarget }) {
+function TargetMarker({
+  target,
+  assisted,
+}: {
+  target: NeedleTarget
+  assisted: boolean
+}) {
   const pulse = useRef<THREE.Group>(null)
   const markerPosition = useMemo(
     () => target.point.clone().addScaledVector(target.normal, 0.42).sub(PALM_PIVOT),
@@ -737,7 +814,9 @@ function TargetMarker({ target }: { target: NeedleTarget }) {
 
   useFrame(({ clock }) => {
     if (!pulse.current) return
-    const scale = 1 + Math.sin(clock.elapsedTime * 3.4) * 0.12
+    const scale =
+      (assisted ? 1.72 : 1) +
+      Math.sin(clock.elapsedTime * (assisted ? 5.2 : 3.4)) * (assisted ? 0.2 : 0.12)
     pulse.current.scale.setScalar(scale)
   })
 
@@ -747,9 +826,9 @@ function TargetMarker({ target }: { target: NeedleTarget }) {
         <mesh>
           <ringGeometry args={[0.48, 0.72, 48]} />
           <meshBasicMaterial
-            color="#74f1bc"
+            color={assisted ? '#c8ffe8' : '#74f1bc'}
             transparent
-            opacity={0.8}
+            opacity={assisted ? 1 : 0.8}
             depthTest
             polygonOffset
             polygonOffsetFactor={-4}
@@ -771,6 +850,20 @@ function TargetMarker({ target }: { target: NeedleTarget }) {
             toneMapped={false}
           />
         </mesh>
+        {assisted && (
+          <mesh>
+            <ringGeometry args={[0.8, 0.92, 64]} />
+            <meshBasicMaterial
+              color="#67edb0"
+              transparent
+              opacity={0.45}
+              depthTest
+              depthWrite={false}
+              toneMapped={false}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        )}
       </group>
     </group>
   )
@@ -1261,6 +1354,7 @@ function RealisticHand({
   onHit,
   onChargeChange,
   gameMode,
+  assisted,
   disabled,
   target,
   activeResult,
@@ -1268,9 +1362,10 @@ function RealisticHand({
   vascularDifficulty,
   treatmentStress,
 }: {
-  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  onHit: (hit: HitInput) => void
   onChargeChange: (charge: NeedleChargeState) => void
   gameMode: GameMode
+  assisted: boolean
   disabled: boolean
   target: NeedleTarget
   activeResult: NeedleResult | null
@@ -1469,6 +1564,7 @@ function RealisticHand({
       result,
       eventZone,
       reaction,
+      usedAssist: assisted,
     })
   }
 
@@ -1483,7 +1579,7 @@ function RealisticHand({
       onPointerCancel={cancelCharge}
     >
       <primitive object={hand} />
-      <TargetMarker target={target} />
+      <TargetMarker target={target} assisted={assisted} />
       {treatmentHits.map((pastHit) => (
         <PersistentMark
           key={`${pastHit.needleNumber}-${pastHit.localPoint.toArray().join('-')}`}
@@ -1541,6 +1637,7 @@ function Scene({
   onHit,
   onChargeChange,
   gameMode,
+  assisted,
   hit,
   disabled,
   target,
@@ -1548,9 +1645,10 @@ function Scene({
   vascularDifficulty,
   patientState,
 }: {
-  onHit: (hit: Omit<Hit, 'needleNumber'>) => void
+  onHit: (hit: HitInput) => void
   onChargeChange: (charge: NeedleChargeState) => void
   gameMode: GameMode
+  assisted: boolean
   hit: Hit | null
   disabled: boolean
   target: NeedleTarget
@@ -1602,6 +1700,7 @@ function Scene({
           onHit={onHit}
           onChargeChange={onChargeChange}
           gameMode={gameMode}
+          assisted={assisted}
           disabled={disabled}
           target={target}
           activeResult={hit?.result ?? null}
@@ -1820,6 +1919,7 @@ function TreatmentSummaryPage({
   )
   const displaySummary = summary ?? localSummary
   const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
+  const gameScore = summarizeGameScores(hits)
   const challengeProgress = evaluatePatientChallenge(
     challenge,
     patientState,
@@ -1851,6 +1951,25 @@ function TreatmentSummaryPage({
             {isAiLoading ? '百炼正在生成评价…' : displaySummary.source === 'ai' ? '阿里云百炼生成评价' : '本地引擎生成 · AI 降级'}
           </small>
         </div>
+      </section>
+
+      <section className="game-score-summary">
+        <div className="game-score-total">
+          <span>本局娱乐分</span>
+          <strong>{gameScore.total}</strong>
+          <small>GAME SCORE</small>
+        </div>
+        <div className="game-score-breakdown">
+          <span><small>模型落点</small><strong>{gameScore.modelLanding}</strong></span>
+          <span><small>操作节奏</small><strong>{gameScore.rhythm}</strong></span>
+          <span><small>游戏结果</small><strong>{gameScore.resultBonus}</strong></span>
+          <span><small>Combo 奖励</small><strong>+{gameScore.comboBonus}</strong></span>
+          <span><small>辅助扣分</small><strong>{gameScore.assistPenalty}</strong></span>
+          <span><small>最高 Combo</small><strong>{gameScore.maxCombo}</strong></span>
+        </div>
+        <p>
+          以下评分仅依据当前 3D 模型内预设坐标与游戏规则，不代表真实穴位定位、针刺水平、医学训练结果或医疗结论。
+        </p>
       </section>
 
       <section
@@ -1887,7 +2006,7 @@ function TreatmentSummaryPage({
       <section className="needle-history">
         <div className="section-heading">
           <span>五针记录</span>
-          <small>{hits.filter((item) => item.result === 'SUCCESS').length} 次精准命中</small>
+          <small>{hits.filter((item) => item.result === 'SUCCESS').length} 次模型目标命中</small>
         </div>
         {hits.map((item, index) => {
           const target = targets[index]
@@ -1904,8 +2023,10 @@ function TreatmentSummaryPage({
                 <strong>第 {item.needleNumber} 针 · {target.code} {target.name}</strong>
                 <small>
                   {copy.title} → {item.reaction.title} · {item.correctSurface
-                    ? `误差 ${item.distance.toFixed(1)}`
+                    ? `模型距离 ${item.distance.toFixed(1)}`
                     : item.surfaceIssue}
+                  {` · +${item.score.total} 娱乐分`}
+                  {item.score.combo >= 2 ? ` · ${item.score.combo} Combo` : ''}
                 </small>
               </div>
             </article>
@@ -1922,7 +2043,7 @@ function TreatmentSummaryPage({
           : displaySummary.source === 'ai'
             ? '本次趣味对白由阿里云百炼生成。'
             : 'AI 暂不可用，已自动切换到本地总结。'}
-        内容仅作游戏科普，不构成医学建议。
+        内容仅作娱乐与游戏科普，不构成医学建议；娱乐分与现实能力无关。
       </p>
     </main>
   )
@@ -1943,6 +2064,7 @@ export default function App() {
   )
   const [showFeedback, setShowFeedback] = useState(false)
   const [needleCharge, setNeedleCharge] = useState<NeedleChargeState>(EMPTY_CHARGE)
+  const [assistEnabled, setAssistEnabled] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
   const [sessionTargets, setSessionTargets] = useState<NeedleTarget[]>(() =>
     createTreatmentPlan(),
@@ -1981,7 +2103,11 @@ export default function App() {
       distance: Number(item.distance.toFixed(1)),
       correctSurface: item.correctSurface,
       stability: Math.round(item.stability * 100),
+      entertainmentScore: item.score.total,
+      combo: item.score.combo,
+      usedGameAssist: item.usedAssist,
     }))
+    const gameScore = summarizeGameScores(finalHits)
 
     setTreatmentSummary(null)
     setSummaryStatus('loading')
@@ -1998,6 +2124,9 @@ export default function App() {
         stateJson: JSON.stringify({
           ...finalState,
           gameMode,
+          entertainmentScore: gameScore,
+          scoringDisclaimer:
+            '仅依据当前3D模型预设坐标与游戏规则，不代表真实穴位定位、针刺水平、医学训练结果或医疗结论。',
           gameChallenge: {
             title: patientChallenge.title,
             description: patientChallenge.description,
@@ -2027,10 +2156,15 @@ export default function App() {
     }
   }
 
-  const handleHit = (nextHit: Omit<Hit, 'needleNumber'>) => {
+  const handleHit = (nextHit: HitInput) => {
     if (hit || needleCount >= MAX_NEEDLES) return
     const nextCount = needleCount + 1
-    const recordedHit = { ...nextHit, needleNumber: nextCount }
+    const score = calculateGameScore(nextHit, treatmentHits, gameMode)
+    const recordedHit: Hit = {
+      ...nextHit,
+      score,
+      needleNumber: nextCount,
+    }
     const nextHits = [...treatmentHits, recordedHit]
     const nextPatientState = applyNeedleResult(
       patientState,
@@ -2040,6 +2174,7 @@ export default function App() {
     )
     setNeedleCount(nextCount)
     setNeedleCharge(EMPTY_CHARGE)
+    setAssistEnabled(false)
     setHit(recordedHit)
     setTreatmentHits(nextHits)
     setPatientState(nextPatientState)
@@ -2076,6 +2211,7 @@ export default function App() {
     }
     setHit(null)
     setNeedleCharge(EMPTY_CHARGE)
+    setAssistEnabled(false)
     setShowFeedback(false)
   }
 
@@ -2085,6 +2221,7 @@ export default function App() {
     setTreatmentHits([])
     setNeedleCount(0)
     setNeedleCharge(EMPTY_CHARGE)
+    setAssistEnabled(false)
     setPatientState(createInitialPatientState(nextPatient))
     setShowFeedback(false)
     setShowSummary(false)
@@ -2191,6 +2328,7 @@ export default function App() {
     : ''
   const isChallengeMode = gameMode === 'CHALLENGE'
   const successStreak = getSuccessStreak(treatmentHits)
+  const liveGameScore = summarizeGameScores(treatmentHits)
   const chargeInstruction =
     needleCharge.progress < 0.2
       ? '继续按住'
@@ -2261,7 +2399,8 @@ export default function App() {
             {hit.reaction.classification} · {isChallengeMode
               ? `稳定度 ${Math.round(hit.stability * 100)}%`
               : '简单版 · 位置判定'}
-            {hit.result === 'SUCCESS' && successStreak >= 2 ? ` · ${successStreak} COMBO` : ''}
+            {hit.score.combo >= 2 ? ` · ${hit.score.combo} COMBO` : ''}
+            {` · +${hit.score.total} 娱乐分`}
           </small>
         </div>
       )}
@@ -2294,6 +2433,7 @@ export default function App() {
             onHit={handleHit}
             onChargeChange={setNeedleCharge}
             gameMode={gameMode}
+            assisted={assistEnabled}
             hit={hit}
             disabled={Boolean(hit)}
             target={activeTarget}
@@ -2306,6 +2446,12 @@ export default function App() {
         <div className="scene-badge">
           <span>穴</span>
           目标：{activeTarget.code} · {activeTarget.name}
+        </div>
+
+        <div className="game-score-hud" aria-label={`当前娱乐分 ${liveGameScore.total}`}>
+          <span>娱乐分</span>
+          <strong>{liveGameScore.total}</strong>
+          <small>{successStreak >= 2 ? `${successStreak} COMBO` : 'GAME ONLY'}</small>
         </div>
 
         <div
@@ -2371,17 +2517,28 @@ export default function App() {
               : `快速找：${activeTarget.quickLocation}`}
           </p>
         </div>
-        <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
-          {Array.from({ length: MAX_NEEDLES }, (_, index) => (
-            <span
-              key={index}
-              className={
-                treatmentHits[index]
-                  ? `done ${treatmentHits[index].result.toLowerCase()}`
-                  : ''
-              }
-            />
-          ))}
+        <div className="control-actions">
+          <div className="shot-dots" aria-label={`已完成 ${needleCount} 针`}>
+            {Array.from({ length: MAX_NEEDLES }, (_, index) => (
+              <span
+                key={index}
+                className={
+                  treatmentHits[index]
+                    ? `done ${treatmentHits[index].result.toLowerCase()}`
+                    : ''
+                }
+              />
+            ))}
+          </div>
+          <button
+            className={`assist-button ${assistEnabled ? 'is-active' : ''}`}
+            type="button"
+            disabled={Boolean(hit) || assistEnabled}
+            onClick={() => setAssistEnabled(true)}
+          >
+            {assistEnabled ? '标记已增强' : '增强游戏标记 · -150'}
+          </button>
+          <small className="assist-caption">只放大现有标记，不代表真实定点</small>
         </div>
       </footer>
 
@@ -2430,6 +2587,17 @@ export default function App() {
                 <strong>{Math.round(hit.stability * 100)}%</strong>
               </div>
             )}
+            <div className="needle-score-card">
+              <div>
+                <span>本针娱乐分</span>
+                <strong>+{hit.score.total}</strong>
+              </div>
+              <small>
+                模型落点 {hit.score.modelLanding} · 操作节奏 {hit.score.rhythm} · 游戏结果 {hit.score.resultBonus}
+                {hit.score.comboBonus > 0 ? ` · Combo +${hit.score.comboBonus}` : ''}
+                {hit.score.assistPenalty < 0 ? ` · 辅助 ${hit.score.assistPenalty}` : ''}
+              </small>
+            </div>
             {activeDelta && (
               <div className="state-delta" aria-label="本针状态变化">
                 {Object.entries(activeDelta)
