@@ -1725,6 +1725,266 @@ h1 {
   margin-top: 16px;
 }
 
+.share-section {
+  margin-top: 12px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.share-card {
+  position: relative;
+  min-height: 390px;
+  padding: 20px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 24px;
+  color: #f6f2eb;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 72, 113, 0.34), transparent 30%),
+    radial-gradient(circle at 5% 72%, rgba(91, 109, 255, 0.27), transparent 36%),
+    linear-gradient(155deg, #171a28, #0c0e17 58%, #15101a);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 55px rgba(0, 0, 0, 0.32);
+}
+
+.share-card::before {
+  content: '？';
+  position: absolute;
+  right: -16px;
+  bottom: -62px;
+  color: rgba(255, 255, 255, 0.025);
+  font-size: 220px;
+  font-weight: 1000;
+  line-height: 1;
+  transform: rotate(8deg);
+  pointer-events: none;
+}
+
+.share-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.share-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.share-card > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.share-card > header small {
+  color: #7f8190;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 7px;
+  letter-spacing: 0.16em;
+}
+
+.share-card > header strong {
+  font-size: 23px;
+  letter-spacing: -0.05em;
+}
+
+.share-card > header > span {
+  padding: 6px 9px;
+  border: 1px solid rgba(103, 237, 176, 0.26);
+  border-radius: 99px;
+  color: #8af0c0;
+  background: rgba(103, 237, 176, 0.07);
+  font-size: 8px;
+}
+
+.share-patient {
+  margin-top: 22px;
+  padding: 13px;
+  display: grid;
+  grid-template-columns: 43px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.share-patient > span {
+  width: 43px;
+  height: 43px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #0c1015;
+  background: linear-gradient(135deg, #ff8aa5, #67edb0);
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.share-patient > div:not(.share-satisfaction) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.share-patient small {
+  color: #767987;
+  font-size: 7px;
+}
+
+.share-patient > div > strong {
+  font-size: 12px;
+}
+
+.share-patient em {
+  overflow: hidden;
+  color: #9b9ca8;
+  font-size: 8px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-satisfaction {
+  display: grid;
+  justify-items: end;
+}
+
+.share-satisfaction strong {
+  color: #ffd36a;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 26px !important;
+  line-height: 1;
+}
+
+.share-hit-strip {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.share-hit-strip > span {
+  --share-hit-color: #67edb0;
+  min-width: 0;
+  padding: 8px 3px 7px;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--share-hit-color) 28%, transparent);
+  border-radius: 12px;
+  color: var(--share-hit-color);
+  background: color-mix(in srgb, var(--share-hit-color) 7%, transparent);
+}
+
+.share-hit-strip i {
+  font-size: 17px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.share-hit-strip small {
+  color: #7d7e8b;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.share-card blockquote {
+  min-height: 86px;
+  margin: 18px 0 0;
+  padding: 13px 14px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border-left: 2px solid #ff668a;
+  border-radius: 3px 14px 14px 3px;
+  color: #e7e3de;
+  background: rgba(255, 102, 138, 0.055);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.6;
+}
+
+.share-card blockquote::before {
+  content: 'AI 趣评';
+  display: block;
+  color: #ff7897;
+  font-size: 7px;
+  letter-spacing: 0.12em;
+}
+
+.share-card blockquote .skeleton-block {
+  height: 13px;
+}
+
+.share-card > footer {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.share-card > footer span {
+  color: #a9abb7;
+  font-size: 8px;
+}
+
+.share-card > footer small {
+  max-width: 180px;
+  color: #5e606e;
+  text-align: right;
+  font-size: 7px;
+  line-height: 1.4;
+}
+
+.share-actions {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 8px;
+}
+
+.share-actions button {
+  min-height: 45px;
+  border: 0;
+  border-radius: 14px;
+  color: #0a0c11;
+  background: #67edb0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.share-actions button.secondary {
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  color: #c6c7d1;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.share-actions button:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.share-status {
+  margin: 9px 4px 0;
+  color: #ff8ba3;
+  text-align: center;
+  font-size: 8px;
+}
+
+.share-status.success {
+  color: #67edb0;
+}
+
 .needle-history {
   margin-top: 12px;
   padding: 18px;

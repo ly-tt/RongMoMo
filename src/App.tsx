@@ -1987,11 +1987,73 @@ function TreatmentSummaryPage({
   )
   const displaySummary = summary ?? localSummary
   const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
+  const [shareStatus, setShareStatus] = useState<
+    'idle' | 'copied' | 'shared' | 'failed'
+  >('idle')
   const challengeProgress = evaluatePatientChallenge(
     challenge,
     patientState,
     hits,
   )
+  const successCount = hits.filter((item) => item.result === 'SUCCESS').length
+  const shareCopy =
+    displaySummary.shareText?.trim() ||
+    `我在《一针见血？》完成了五针挑战，${successCount} 次命中当前模型目标，虚构患者满意度 ${displaySummary.satisfaction}%。${displaySummary.title}`
+
+  const buildShareText = (includeUrl = true) =>
+    [
+      shareCopy,
+      '',
+      `虚构患者：${patient.name}｜五针结果：${hits
+        .map((item) => item.reaction.title)
+        .join('、')}`,
+      '本内容来自娱乐游戏，不代表真实穴位定位、针刺水平或医疗结论。',
+      '#一针见血 #3D互动游戏 #AI游戏 #黑客松',
+      ...(includeUrl ? [window.location.href] : []),
+    ].join('\n')
+
+  const copyShareText = async () => {
+    if (isAiLoading) return
+    try {
+      const text = buildShareText()
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.setAttribute('readonly', '')
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        const copied = document.execCommand('copy')
+        textarea.remove()
+        if (!copied) throw new Error('copy failed')
+      }
+      setShareStatus('copied')
+    } catch {
+      setShareStatus('failed')
+    }
+  }
+
+  const shareTreatment = async () => {
+    if (isAiLoading) return
+    if (!navigator.share) {
+      await copyShareText()
+      return
+    }
+    try {
+      await navigator.share({
+        title: '《一针见血？》五针疗程报告',
+        text: buildShareText(false),
+        url: window.location.href,
+      })
+      setShareStatus('shared')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setShareStatus('failed')
+    }
+  }
 
   return (
     <main className="summary-shell">
@@ -2051,10 +2113,84 @@ function TreatmentSummaryPage({
         )}
       </section>
 
+      <section className="share-section">
+        <div className="section-heading">
+          <span>分享本局</span>
+          <small>长按或截图保存卡片</small>
+        </div>
+        <article className={`share-card ${isAiLoading ? 'is-loading' : ''}`}>
+          <header>
+            <div>
+              <small>NEEDLE ROULETTE</small>
+              <strong>一针见血？</strong>
+            </div>
+            <span>五针报告</span>
+          </header>
+          <div className="share-patient">
+            <span>{patient.name.slice(0, 1)}</span>
+            <div>
+              <small>虚构患者</small>
+              <strong>{patient.name} · {patient.age} 岁</strong>
+              <em>{patient.personality}</em>
+            </div>
+            <div className="share-satisfaction">
+              <strong>{displaySummary.satisfaction}</strong>
+              <small>游戏满意度</small>
+            </div>
+          </div>
+          <div className="share-hit-strip" aria-label="五针游戏结果">
+            {hits.map((item) => (
+              <span
+                key={item.needleNumber}
+                style={{ '--share-hit-color': item.reaction.accent } as React.CSSProperties}
+              >
+                <i>{item.reaction.icon}</i>
+                <small>第{item.needleNumber}针</small>
+              </span>
+            ))}
+          </div>
+          <blockquote>
+            {isAiLoading ? (
+              <>
+                <span className="skeleton-block" />
+                <span className="skeleton-block short" />
+              </>
+            ) : (
+              shareCopy
+            )}
+          </blockquote>
+          <footer>
+            <span>AI 驱动 · 3D 互动</span>
+            <small>仅为娱乐游戏，与真实医疗能力无关</small>
+          </footer>
+        </article>
+        <div className="share-actions">
+          <button type="button" disabled={isAiLoading} onClick={() => void copyShareText()}>
+            {isAiLoading ? '等待 AI 文案…' : shareStatus === 'copied' ? '✓ 文案已复制' : '复制小红书文案'}
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={isAiLoading}
+            onClick={() => void shareTreatment()}
+          >
+            系统分享
+          </button>
+        </div>
+        {shareStatus === 'failed' && (
+          <p className="share-status" role="status">
+            当前浏览器未允许分享，请直接截图或长按复制。
+          </p>
+        )}
+        {shareStatus === 'shared' && (
+          <p className="share-status success" role="status">分享面板已打开。</p>
+        )}
+      </section>
+
       <section className="needle-history">
         <div className="section-heading">
           <span>五针记录</span>
-          <small>{hits.filter((item) => item.result === 'SUCCESS').length} 次模型目标命中</small>
+          <small>{successCount} 次模型目标命中</small>
         </div>
         {hits.map((item, index) => {
           const target = targets[index]
