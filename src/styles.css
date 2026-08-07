@@ -1016,12 +1016,19 @@ h1 {
 }
 
 .impact-callout strong {
+  max-width: min(92vw, 480px);
   color: #fffdf7;
-  font-size: clamp(38px, 11vw, 58px);
-  font-weight: 1000;
-  line-height: 0.94;
-  letter-spacing: -0.08em;
-  -webkit-text-stroke: 1px color-mix(in srgb, var(--impact-color) 74%, white);
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: clamp(34px, 10vw, 54px);
+  font-weight: 900;
+  line-height: 1.08;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+  text-shadow:
+    0 2px 0 color-mix(in srgb, var(--impact-color) 42%, #161824),
+    0 0 12px color-mix(in srgb, var(--impact-color) 72%, transparent),
+    0 0 30px color-mix(in srgb, var(--impact-color) 36%, transparent);
+  -webkit-font-smoothing: antialiased;
 }
 
 .impact-callout small {
