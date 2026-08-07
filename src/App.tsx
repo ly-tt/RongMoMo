@@ -1,6 +1,6 @@
 import { Canvas, ThreeEvent, useFrame, useThree } from '@react-three/fiber'
-import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { ContactShadows, OrbitControls, useGLTF, useProgress } from '@react-three/drei'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
   requestAiPatient,
@@ -171,6 +171,36 @@ const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
   NERVE: { pain: 24, bruise: 0, bleeding: 0, numb: 34, trust: -18 },
   BRUISE: { pain: 10, bruise: 26, bleeding: 2, numb: 0, trust: -8 },
   BONE: { pain: 28, bruise: 5, bleeding: 0, numb: 3, trust: -22 },
+}
+
+function HandLoadingOverlay({ ready }: { ready: boolean }) {
+  const { active, progress } = useProgress()
+  if (ready) return null
+
+  const visibleProgress = active
+    ? Math.max(8, Math.min(96, Math.round(progress)))
+    : progress >= 100
+      ? 96
+      : 12
+
+  return (
+    <div className="model-loading-overlay" role="status" aria-live="polite">
+      <div className="loading-hand-icon" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </div>
+      <strong>正在准备 3D 手部模型</strong>
+      <span>{visibleProgress < 96 ? '加载模型与材质…' : '正在布置穴位与灯光…'}</span>
+      <div
+        className="model-loading-track"
+        style={{ '--model-progress': `${visibleProgress}%` } as React.CSSProperties}
+      >
+        <i />
+      </div>
+      <small>{visibleProgress}%</small>
+    </div>
+  )
 }
 
 const REACTION_IMPACT: Partial<Record<NeedleReaction['code'], StateDelta>> = {
@@ -623,7 +653,7 @@ function classifyNeedleEvent({
   return { result: 'BONE', eventZone: 'HARD_TISSUE' }
 }
 
-function playNeedleSound(result: NeedleResult, combo = 0) {
+function playNeedleSound(result: NeedleResult, combo = 0, delay = 0) {
   const AudioContextClass =
     window.AudioContext ??
     (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -631,7 +661,7 @@ function playNeedleSound(result: NeedleResult, combo = 0) {
 
   const context = new AudioContextClass()
   void context.resume()
-  const now = context.currentTime
+  const now = context.currentTime + delay
   const master = context.createGain()
   const compressor = context.createDynamicsCompressor()
   master.gain.setValueAtTime(0.0001, now)
@@ -753,7 +783,7 @@ function playNeedleSound(result: NeedleResult, combo = 0) {
     noise({ duration: 0.11, volume: 0.28, filterType: 'highpass', frequency: 3100 })
   }
 
-  window.setTimeout(() => void context.close(), 1700)
+  window.setTimeout(() => void context.close(), (delay + 1.7) * 1000)
 }
 
 function playInterfaceSound(kind: 'start' | 'continue' | 'toggle') {
@@ -1004,6 +1034,7 @@ function PersistentMark({ hit }: { hit: Hit }) {
 
 function Needle({ hit }: { hit: Hit }) {
   const needle = useRef<THREE.Group>(null)
+  const contact = useRef<THREE.Group>(null)
   const elapsed = useRef(0)
   const coil = useMemo(() => {
     const points: THREE.Vector3[] = []
@@ -1026,6 +1057,9 @@ function Needle({ hit }: { hit: Hit }) {
   useFrame((_, delta) => {
     if (!needle.current) return
     elapsed.current += delta
+    if (contact.current) {
+      contact.current.visible = elapsed.current >= NEEDLE_CONTACT_DELAY
+    }
     const insertionTarget =
       hit.result === 'BONE' && elapsed.current > 0.42
         ? 0.34 + Math.sin(elapsed.current * 28) * 0.035
@@ -1065,18 +1099,20 @@ function Needle({ hit }: { hit: Hit }) {
           <meshStandardMaterial color="#ff4d73" roughness={0.38} />
         </mesh>
       </group>
-      <mesh>
-        <ringGeometry args={[0.12, 0.155, 32]} />
-        <meshBasicMaterial
-          color={RESULT_COPY[hit.result].accent}
-          transparent
-          opacity={0.9}
-          depthTest={false}
-          toneMapped={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-      <pointLight color={RESULT_COPY[hit.result].accent} intensity={2.2} distance={1.8} />
+      <group ref={contact} visible={false}>
+        <mesh>
+          <ringGeometry args={[0.12, 0.155, 32]} />
+          <meshBasicMaterial
+            color={RESULT_COPY[hit.result].accent}
+            transparent
+            opacity={0.9}
+            depthTest={false}
+            toneMapped={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+        <pointLight color={RESULT_COPY[hit.result].accent} intensity={2.2} distance={1.8} />
+      </group>
     </group>
   )
 }
@@ -1382,6 +1418,7 @@ function HitEffect({ hit }: { hit: Hit }) {
 function RealisticHand({
   onHit,
   onChargeChange,
+  onReady,
   gameMode,
   disabled,
   target,
@@ -1392,6 +1429,7 @@ function RealisticHand({
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
+  onReady: () => void
   gameMode: GameMode
   disabled: boolean
   target: NeedleTarget
@@ -1434,6 +1472,10 @@ function RealisticHand({
 
     return { hand: preparedHand }
   }, [scene])
+
+  useEffect(() => {
+    onReady()
+  }, [onReady])
 
   useFrame(({ clock }) => {
     if (!handGroup.current) return
@@ -1662,6 +1704,7 @@ function ImpactCamera({ result }: { result: NeedleResult }) {
 function Scene({
   onHit,
   onChargeChange,
+  onHandReady,
   gameMode,
   hit,
   disabled,
@@ -1672,6 +1715,7 @@ function Scene({
 }: {
   onHit: (hit: Omit<Hit, 'needleNumber'>) => void
   onChargeChange: (charge: NeedleChargeState) => void
+  onHandReady: () => void
   gameMode: GameMode
   hit: Hit | null
   disabled: boolean
@@ -1723,6 +1767,7 @@ function Scene({
         <RealisticHand
           onHit={onHit}
           onChargeChange={onChargeChange}
+          onReady={onHandReady}
           gameMode={gameMode}
           disabled={disabled}
           target={target}
@@ -2058,6 +2103,8 @@ export default function App() {
   const [started, setStarted] = useState(false)
   const [gameMode, setGameMode] = useState<GameMode>('SIMPLE')
   const [hit, setHit] = useState<Hit | null>(null)
+  const [impactActive, setImpactActive] = useState(false)
+  const [handReady, setHandReady] = useState(false)
   const [treatmentHits, setTreatmentHits] = useState<Hit[]>([])
   const [needleCount, setNeedleCount] = useState(0)
   const [patientState, setPatientState] = useState<PatientState>(() =>
@@ -2163,6 +2210,7 @@ export default function App() {
     )
     setNeedleCount(nextCount)
     setNeedleCharge(EMPTY_CHARGE)
+    setImpactActive(false)
     setHit(recordedHit)
     setTreatmentHits(nextHits)
     setPatientState(nextPatientState)
@@ -2175,19 +2223,32 @@ export default function App() {
         nextHit.result === 'SUCCESS'
           ? getSuccessStreak(treatmentHits) + 1
           : 0
-      playNeedleSound(nextHit.result, combo)
-    }
-    if ('vibrate' in navigator) {
-      const vibrationPatterns: Record<NeedleResult, number | number[]> = {
-        SUCCESS: 35,
-        BLOOD: [45, 35, 65],
-        NERVE: [20, 25, 20, 25, 65],
-        BRUISE: [55, 35, 35],
-        BONE: [90, 30, 45],
-      }
-      navigator.vibrate(vibrationPatterns[nextHit.result])
+      playNeedleSound(nextHit.result, combo, NEEDLE_CONTACT_DELAY)
     }
   }
+
+  useEffect(() => {
+    if (!hit) {
+      setImpactActive(false)
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setImpactActive(true)
+      if ('vibrate' in navigator) {
+        const vibrationPatterns: Record<NeedleResult, number | number[]> = {
+          SUCCESS: 35,
+          BLOOD: [45, 35, 65],
+          NERVE: [20, 25, 20, 25, 65],
+          BRUISE: [55, 35, 35],
+          BONE: [90, 30, 45],
+        }
+        navigator.vibrate(vibrationPatterns[hit.result])
+      }
+    }, NEEDLE_CONTACT_DELAY * 1000)
+
+    return () => window.clearTimeout(timer)
+  }, [hit])
 
   useEffect(() => {
     if (!hit || showFeedback) return
@@ -2199,12 +2260,14 @@ export default function App() {
     if (soundEnabled) playInterfaceSound('continue')
     if (needleCount >= MAX_NEEDLES) {
       setHit(null)
+      setImpactActive(false)
       setNeedleCharge(EMPTY_CHARGE)
       setShowFeedback(false)
       setShowSummary(true)
       return
     }
     setHit(null)
+    setImpactActive(false)
     setNeedleCharge(EMPTY_CHARGE)
     setShowFeedback(false)
   }
@@ -2212,6 +2275,8 @@ export default function App() {
   const resetTreatment = (nextPatient: PatientProfile) => {
     summaryRequestId.current += 1
     setHit(null)
+    setImpactActive(false)
+    setHandReady(false)
     setTreatmentHits([])
     setNeedleCount(0)
     setNeedleCharge(EMPTY_CHARGE)
@@ -2328,6 +2393,7 @@ export default function App() {
       : needleCharge.stability >= 0.72
         ? '现在松手！'
         : '等待绿色窗口'
+  const markHandReady = useCallback(() => setHandReady(true), [])
 
   if (!started) {
     return (
@@ -2360,11 +2426,13 @@ export default function App() {
 
   return (
     <main
-      className={`app-shell mode-${gameMode.toLowerCase()} ${hit ? `result-${activeEffect}` : ''} ${activeReactionClass} ${
+      className={`app-shell mode-${gameMode.toLowerCase()} ${hit && impactActive ? `result-${activeEffect}` : ''} ${
+        impactActive ? activeReactionClass : ''
+      } ${
         treatmentStress >= 0.35 ? 'state-stressed' : ''
       }`}
     >
-      {hit && (
+      {hit && impactActive && (
         <div className="screen-effect" aria-hidden="true">
           <div className="impact-burst" />
           <div className="impact-speed-lines">
@@ -2380,7 +2448,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {hit && !showFeedback && (
+      {hit && impactActive && !showFeedback && (
         <div
           className={`impact-callout severity-${hit.reaction.severity.toLowerCase()}`}
           style={{ '--impact-color': hit.reaction.accent } as React.CSSProperties}
@@ -2427,8 +2495,9 @@ export default function App() {
       <PatientStatus state={patientState} />
 
       <section
-        className={`scene-card ${needleCharge.active ? 'is-charging' : ''}`}
+        className={`scene-card ${needleCharge.active ? 'is-charging' : ''} ${!handReady ? 'is-loading' : ''}`}
         aria-label="寻找穴位并按住蓄针的三维手部模型"
+        aria-busy={!handReady}
       >
         <Canvas
           shadows
@@ -2439,15 +2508,18 @@ export default function App() {
           <Scene
             onHit={handleHit}
             onChargeChange={setNeedleCharge}
+            onHandReady={markHandReady}
             gameMode={gameMode}
             hit={hit}
-            disabled={Boolean(hit)}
+            disabled={Boolean(hit) || !handReady}
             target={activeTarget}
             treatmentHits={treatmentHits}
             vascularDifficulty={patient.vascularDifficulty}
             patientState={patientState}
           />
         </Canvas>
+
+        <HandLoadingOverlay ready={handReady} />
 
         <div className="scene-badge">
           <span>穴</span>
@@ -2466,6 +2538,8 @@ export default function App() {
           <i />
           {hit
             ? '正在进针…'
+            : !handReady
+              ? '正在准备 3D 手部模型…'
             : isChallengeMode
               ? needleCharge.active
                 ? chargeInstruction
