@@ -45,10 +45,49 @@ canvas {
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
-  justify-content: space-between;
+  gap: 10px;
   padding: 4px 2px;
+}
+
+.topbar-title {
+  min-width: 0;
+}
+
+.topbar-title .eyebrow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.topbar-title .eyebrow span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-title .eyebrow b,
+.topbar-title .eyebrow i {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 99px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+
+.topbar-title .eyebrow b {
+  color: #ff9cb2;
+  background: rgba(255, 67, 111, 0.09);
+}
+
+.topbar-title .eyebrow i {
+  color: #8eeec1;
+  background: rgba(103, 237, 176, 0.08);
 }
 
 .eyebrow {
@@ -69,6 +108,7 @@ h1 {
 }
 
 .topbar-actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1944,14 +1984,9 @@ h1 {
   line-height: 1.4;
 }
 
-.share-actions {
+.share-download-button {
   margin-top: 12px;
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 8px;
-}
-
-.share-actions button {
+  width: 100%;
   min-height: 45px;
   border: 0;
   border-radius: 14px;
@@ -1963,13 +1998,7 @@ h1 {
   cursor: pointer;
 }
 
-.share-actions button.secondary {
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  color: #c6c7d1;
-  background: rgba(255, 255, 255, 0.045);
-}
-
-.share-actions button:disabled {
+.share-download-button:disabled {
   cursor: wait;
   opacity: 0.45;
 }

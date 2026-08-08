@@ -135,7 +135,7 @@ const PATIENT_ARCHETYPES = [
   },
   {
     name: '林知夏',
-    personality: '冷静观察型',
+    personality: '冷静型',
     openingLine: '“我会认真记住每一针的位置，请开始吧。”',
     trustSensitivity: 0.82,
   },
@@ -164,6 +164,36 @@ const PATIENT_ARCHETYPES = [
     trustSensitivity: 0.72,
   },
 ]
+
+const PATIENT_TYPE_RULES: Array<[RegExp, string]> = [
+  [/嘴硬|逞强|要强/, '嘴硬型'],
+  [/冷静|理性|观察|沉着/, '冷静型'],
+  [/话痨|健谈|爱聊|外向/, '话痨型'],
+  [/好奇|求知|探索/, '好奇型'],
+  [/戏精|夸张|表演/, '戏精型'],
+  [/乐观|开朗|积极/, '乐观型'],
+  [/谨慎|胆小|怕疼|紧张/, '谨慎型'],
+  [/稳重|温和|随和/, '随和型'],
+  [/急躁|急性|着急/, '急性型'],
+]
+
+function normalizePatientType(value: string) {
+  const compact = value.trim().replace(/\s+/g, '')
+  const matched = PATIENT_TYPE_RULES.find(([pattern]) => pattern.test(compact))
+  if (matched) return matched[1]
+
+  const chineseCharacters = Array.from(compact.replace(/型/g, '')).filter((character) =>
+    /[\u3400-\u9fff]/.test(character),
+  )
+  return chineseCharacters.length >= 2
+    ? `${chineseCharacters.slice(0, 2).join('')}型`
+    : '随和型'
+}
+
+function normalizePatientName(value: string) {
+  const name = Array.from(value.trim().replace(/\s+/g, '')).slice(0, 4).join('')
+  return name || '小王'
+}
 
 const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
   SUCCESS: { pain: 2, bruise: 0, bleeding: 0, numb: 7, trust: 8 },
@@ -365,6 +395,7 @@ export function createLocalPatient(excludedNames: string[] = []): PatientProfile
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     ...archetype,
+    personality: normalizePatientType(archetype.personality),
     age: Math.floor(20 + Math.random() * 35),
     painTolerance: Math.floor(28 + Math.random() * 62),
     vascularDifficulty: Math.floor(25 + Math.random() * 66),
@@ -375,11 +406,11 @@ function createPatientFromAi(patient: AiPatient): PatientProfile {
   const openingLine = patient.openingDialog.trim().replace(/^["“”]+|["“”]+$/g, '')
   return {
     id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    name: patient.name.trim().slice(0, 12),
+    name: normalizePatientName(patient.name),
     age: clampState(patient.age),
     painTolerance: clampState(patient.painTolerance),
     vascularDifficulty: clampState(patient.vascularDifficulty),
-    personality: patient.personality.trim().slice(0, 24),
+    personality: normalizePatientType(patient.personality),
     openingLine: `“${openingLine.slice(0, 48)}”`,
     trustSensitivity: THREE.MathUtils.clamp(
       0.78 + (100 - patient.painTolerance) * 0.0045,
@@ -1987,8 +2018,8 @@ function TreatmentSummaryPage({
   )
   const displaySummary = summary ?? localSummary
   const isAiLoading = summaryStatus === 'idle' || summaryStatus === 'loading'
-  const [shareStatus, setShareStatus] = useState<
-    'idle' | 'copied' | 'shared' | 'failed'
+  const [shareImageStatus, setShareImageStatus] = useState<
+    'idle' | 'generating' | 'downloaded' | 'failed'
   >('idle')
   const challengeProgress = evaluatePatientChallenge(
     challenge,
@@ -2000,58 +2031,182 @@ function TreatmentSummaryPage({
     displaySummary.shareText?.trim() ||
     `我在《一针见血？》完成了五针挑战，${successCount} 次命中当前模型目标，虚构患者满意度 ${displaySummary.satisfaction}%。${displaySummary.title}`
 
-  const buildShareText = (includeUrl = true) =>
-    [
-      shareCopy,
-      '',
-      `虚构患者：${patient.name}｜五针结果：${hits
-        .map((item) => item.reaction.title)
-        .join('、')}`,
-      '本内容来自娱乐游戏，不代表真实穴位定位、针刺水平或医疗结论。',
-      '#一针见血 #3D互动游戏 #AI游戏 #黑客松',
-      ...(includeUrl ? [window.location.href] : []),
-    ].join('\n')
+  const downloadShareImage = async () => {
+    if (isAiLoading || shareImageStatus === 'generating') return
+    setShareImageStatus('generating')
 
-  const copyShareText = async () => {
-    if (isAiLoading) return
     try {
-      const text = buildShareText()
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text)
-      } else {
-        const textarea = document.createElement('textarea')
-        textarea.value = text
-        textarea.setAttribute('readonly', '')
-        textarea.style.position = 'fixed'
-        textarea.style.opacity = '0'
-        document.body.appendChild(textarea)
-        textarea.select()
-        const copied = document.execCommand('copy')
-        textarea.remove()
-        if (!copied) throw new Error('copy failed')
+      await document.fonts?.ready
+      const canvas = document.createElement('canvas')
+      canvas.width = 1080
+      canvas.height = 1440
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Canvas is unavailable')
+
+      const roundedRect = (
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        radius: number,
+        fill: string,
+        stroke?: string,
+      ) => {
+        context.beginPath()
+        context.roundRect(x, y, width, height, radius)
+        context.fillStyle = fill
+        context.fill()
+        if (stroke) {
+          context.strokeStyle = stroke
+          context.lineWidth = 2
+          context.stroke()
+        }
       }
-      setShareStatus('copied')
-    } catch {
-      setShareStatus('failed')
-    }
-  }
 
-  const shareTreatment = async () => {
-    if (isAiLoading) return
-    if (!navigator.share) {
-      await copyShareText()
-      return
-    }
-    try {
-      await navigator.share({
-        title: '《一针见血？》五针疗程报告',
-        text: buildShareText(false),
-        url: window.location.href,
+      const drawWrappedText = (
+        text: string,
+        x: number,
+        y: number,
+        maxWidth: number,
+        lineHeight: number,
+        maxLines: number,
+      ) => {
+        const lines: string[] = []
+        let line = ''
+        for (const character of Array.from(text)) {
+          const nextLine = line + character
+          if (context.measureText(nextLine).width > maxWidth && line) {
+            lines.push(line)
+            line = character
+            if (lines.length === maxLines - 1) break
+          } else {
+            line = nextLine
+          }
+        }
+        if (line && lines.length < maxLines) lines.push(line)
+        lines.forEach((item, index) => context.fillText(item, x, y + index * lineHeight))
+      }
+
+      const background = context.createLinearGradient(0, 0, 1080, 1440)
+      background.addColorStop(0, '#171a2b')
+      background.addColorStop(0.56, '#090b13')
+      background.addColorStop(1, '#17101c')
+      context.fillStyle = background
+      context.fillRect(0, 0, 1080, 1440)
+
+      const pinkGlow = context.createRadialGradient(920, 120, 0, 920, 120, 430)
+      pinkGlow.addColorStop(0, 'rgba(255,67,111,0.48)')
+      pinkGlow.addColorStop(1, 'rgba(255,67,111,0)')
+      context.fillStyle = pinkGlow
+      context.fillRect(490, 0, 590, 570)
+
+      const blueGlow = context.createRadialGradient(110, 1050, 0, 110, 1050, 480)
+      blueGlow.addColorStop(0, 'rgba(86,105,255,0.34)')
+      blueGlow.addColorStop(1, 'rgba(86,105,255,0)')
+      context.fillStyle = blueGlow
+      context.fillRect(0, 570, 640, 870)
+
+      context.fillStyle = '#85899c'
+      context.font = '700 24px ui-monospace, Consolas, monospace'
+      context.letterSpacing = '5px'
+      context.fillText('NEEDLE ROULETTE', 74, 92)
+      context.letterSpacing = '0px'
+      context.fillStyle = '#f8f2ea'
+      context.font = '900 76px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText('一针见血？', 70, 182)
+
+      roundedRect(790, 72, 220, 64, 32, 'rgba(103,237,176,0.08)', 'rgba(103,237,176,0.42)')
+      context.fillStyle = '#8bf1c2'
+      context.font = '800 28px system-ui, "Microsoft YaHei", sans-serif'
+      context.textAlign = 'center'
+      context.fillText('五针报告', 900, 114)
+      context.textAlign = 'left'
+
+      roundedRect(70, 244, 940, 210, 38, 'rgba(255,255,255,0.055)', 'rgba(255,255,255,0.13)')
+      const avatar = context.createLinearGradient(100, 282, 230, 410)
+      avatar.addColorStop(0, '#ff8aa5')
+      avatar.addColorStop(1, '#67edb0')
+      context.fillStyle = avatar
+      context.beginPath()
+      context.arc(170, 349, 66, 0, Math.PI * 2)
+      context.fill()
+      context.fillStyle = '#0b0f14'
+      context.font = '900 48px system-ui, "Microsoft YaHei", sans-serif'
+      context.textAlign = 'center'
+      context.fillText(Array.from(patient.name)[0] ?? '患', 170, 366)
+      context.textAlign = 'left'
+
+      context.fillStyle = '#737887'
+      context.font = '700 20px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText('虚构患者', 270, 310)
+      context.fillStyle = '#f4f0e9'
+      context.font = '800 39px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText(`${patient.name} · ${patient.age} 岁`, 270, 360)
+      context.fillStyle = '#a2a5b3'
+      context.font = '700 27px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText(patient.personality, 270, 404)
+
+      context.fillStyle = '#ffd36a'
+      context.font = '900 78px ui-monospace, Consolas, monospace'
+      context.textAlign = 'right'
+      context.fillText(String(displaySummary.satisfaction), 942, 353)
+      context.fillStyle = '#838797'
+      context.font = '700 20px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText('游戏满意度', 942, 397)
+      context.textAlign = 'left'
+
+      const hitWidth = 172
+      hits.forEach((item, index) => {
+        const x = 70 + index * 192
+        roundedRect(x, 500, hitWidth, 158, 28, `${item.reaction.accent}18`, `${item.reaction.accent}66`)
+        context.fillStyle = item.reaction.accent
+        context.font = '46px "Apple Color Emoji", "Segoe UI Emoji", sans-serif'
+        context.textAlign = 'center'
+        context.fillText(item.reaction.icon, x + hitWidth / 2, 562)
+        context.font = '800 24px system-ui, "Microsoft YaHei", sans-serif'
+        context.fillText(`第${item.needleNumber}针`, x + hitWidth / 2, 617)
       })
-      setShareStatus('shared')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setShareStatus('failed')
+      context.textAlign = 'left'
+
+      roundedRect(70, 710, 940, 430, 34, 'rgba(255,102,138,0.065)', 'rgba(255,102,138,0.22)')
+      context.fillStyle = '#ff7897'
+      context.font = '800 23px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText('AI 趣评', 116, 780)
+      context.fillStyle = '#f0ece7'
+      context.font = '750 42px system-ui, "Microsoft YaHei", sans-serif'
+      drawWrappedText(shareCopy, 116, 850, 845, 68, 4)
+      context.fillStyle = '#9a9dac'
+      context.font = '700 26px system-ui, "Microsoft YaHei", sans-serif'
+      drawWrappedText(displaySummary.title, 116, 1080, 845, 42, 1)
+
+      context.fillStyle = '#b4b7c4'
+      context.font = '700 25px system-ui, "Microsoft YaHei", sans-serif'
+      context.fillText('AI 驱动 · 3D 互动', 72, 1270)
+      context.fillStyle = '#686b79'
+      context.font = '600 21px system-ui, "Microsoft YaHei", sans-serif'
+      context.textAlign = 'right'
+      context.fillText('仅为娱乐游戏，与真实穴位及医疗能力无关', 1008, 1270)
+      context.fillStyle = '#ff668a'
+      context.fillRect(70, 1320, 940, 4)
+      context.fillStyle = '#777b8c'
+      context.font = '600 20px ui-monospace, Consolas, monospace'
+      context.textAlign = 'center'
+      context.fillText('NEEDLE ROULETTE · 2026', 540, 1378)
+
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('Image generation failed'))), 'image/png')
+      })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `一针见血-${normalizePatientName(patient.name)}-五针报告.png`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 3000)
+      setShareImageStatus('downloaded')
+    } catch {
+      setShareImageStatus('failed')
     }
   }
 
@@ -2116,7 +2271,7 @@ function TreatmentSummaryPage({
       <section className="share-section">
         <div className="section-heading">
           <span>分享本局</span>
-          <small>长按或截图保存卡片</small>
+          <small>生成高清 PNG 成绩卡</small>
         </div>
         <article className={`share-card ${isAiLoading ? 'is-loading' : ''}`}>
           <header>
@@ -2164,26 +2319,27 @@ function TreatmentSummaryPage({
             <small>仅为娱乐游戏，与真实医疗能力无关</small>
           </footer>
         </article>
-        <div className="share-actions">
-          <button type="button" disabled={isAiLoading} onClick={() => void copyShareText()}>
-            {isAiLoading ? '等待 AI 文案…' : shareStatus === 'copied' ? '✓ 文案已复制' : '复制小红书文案'}
-          </button>
-          <button
-            className="secondary"
-            type="button"
-            disabled={isAiLoading}
-            onClick={() => void shareTreatment()}
-          >
-            系统分享
-          </button>
-        </div>
-        {shareStatus === 'failed' && (
+        <button
+          className="share-download-button"
+          type="button"
+          disabled={isAiLoading || shareImageStatus === 'generating'}
+          onClick={() => void downloadShareImage()}
+        >
+          {isAiLoading
+            ? '等待 AI 生成评语…'
+            : shareImageStatus === 'generating'
+              ? '正在生成图片…'
+              : shareImageStatus === 'downloaded'
+                ? '✓ 已下载，再生成一张'
+                : '生成并下载分享图片'}
+        </button>
+        {shareImageStatus === 'failed' && (
           <p className="share-status" role="status">
-            当前浏览器未允许分享，请直接截图或长按复制。
+            图片生成失败，请刷新页面后重试。
           </p>
         )}
-        {shareStatus === 'shared' && (
-          <p className="share-status success" role="status">分享面板已打开。</p>
+        {shareImageStatus === 'downloaded' && (
+          <p className="share-status success" role="status">高清 PNG 已保存到浏览器下载目录。</p>
         )}
       </section>
 
@@ -2601,9 +2757,11 @@ export default function App() {
         </div>
       )}
       <header className="topbar">
-        <div>
+        <div className="topbar-title">
           <p className="eyebrow">
-            {patient.name} · {patient.personality} · {isChallengeMode ? '挑战版' : '简单版'}
+            <span>{patient.name}</span>
+            <b>{patient.personality}</b>
+            <i>{isChallengeMode ? '挑战版' : '简单版'}</i>
           </p>
           <h1>一针见血？</h1>
         </div>
