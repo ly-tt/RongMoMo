@@ -11,7 +11,7 @@ const REPORT_APP_ID =
 const ALLOWED_ORIGIN =
   process.env.ALLOWED_ORIGIN || 'https://rongmomo.lyshowcase.com'
 const MAX_BODY_BYTES = 24_000
-const REQUEST_TIMEOUT_MS = 15_000
+const REQUEST_TIMEOUT_MS = 25_000
 const REQUESTS_PER_MINUTE = 15
 const DEBUG_AI_OUTPUT = process.env.DEBUG_AI_OUTPUT === 'true'
 const requestBuckets = new Map()
@@ -187,22 +187,36 @@ async function callBailian(appId, prompt, bizParams, context) {
   }
 
   const startedAt = Date.now()
-  const response = await fetch(
-    `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        input: {
-          prompt,
-          ...(bizParams ? { biz_params: bizParams } : {}),
-        },
-        parameters: {},
-        debug: {},
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    },
-  )
+  let response
+  try {
+    response = await fetch(
+      `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          input: {
+            prompt,
+            ...(bizParams ? { biz_params: bizParams } : {}),
+          },
+          parameters: {},
+          debug: {},
+        }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      },
+    )
+  } catch (cause) {
+    if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') {
+      logEvent('error', 'ai_upstream_timeout', {
+        ...context,
+        durationMs: Date.now() - startedAt,
+      })
+      const error = new Error('AI_UPSTREAM_TIMEOUT')
+      error.status = 504
+      throw error
+    }
+    throw cause
+  }
 
   if (!response.ok) {
     logEvent('error', 'ai_upstream_failed', {
@@ -423,6 +437,7 @@ const server = createServer(async (request, response) => {
       'INVALID_SESSION_INPUT',
       'AI_NOT_CONFIGURED',
       'AI_UPSTREAM_FAILED',
+      'AI_UPSTREAM_TIMEOUT',
       'INVALID_AI_RESPONSE',
       'INVALID_AI_JSON',
       'INVALID_PATIENT_RESULT',

@@ -38,7 +38,7 @@ async function callBailian(env, appId, prompt, bizParams) {
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15_000)
+  const timer = setTimeout(() => controller.abort(), 25_000)
   try {
     const response = await fetch(
       `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,

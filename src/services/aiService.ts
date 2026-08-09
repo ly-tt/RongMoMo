@@ -55,9 +55,9 @@ export type AiReportInput = {
 }
 
 const API_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL ?? '').replace(/\/$/, '')
-// Keep the browser timeout slightly above the proxy's 15 s upstream timeout,
+// Keep the browser timeout slightly above the proxy's 25 s upstream timeout,
 // otherwise a valid Bailian response can arrive after the UI has already fallen back.
-const REQUEST_TIMEOUT_MS = 18_000
+const REQUEST_TIMEOUT_MS = 28_000
 const PATIENT_AGE_RANGES = ['18～25', '26～35', '36～45', '46～60'] as const
 const PATIENT_PERSONALITY_DIRECTIONS = [
   '嘴硬但怕疼',
