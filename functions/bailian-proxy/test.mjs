@@ -53,6 +53,18 @@ try {
   assert.equal(patientError.error, 'AI_NOT_CONFIGURED')
   assert.equal(typeof patientError.requestId, 'string')
 
+  const session = await fetch('http://127.0.0.1:19000/api/ai/session', {
+    method: 'POST',
+    headers: {
+      Origin: 'https://rongmomo.lyshowcase.com',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: '{"sessionSeed":"test"}' }),
+  })
+  assert.equal(session.status, 503)
+  const sessionError = await session.json()
+  assert.equal(sessionError.error, 'AI_NOT_CONFIGURED')
+
   console.log('Bailian proxy tests passed')
 } finally {
   child.kill()

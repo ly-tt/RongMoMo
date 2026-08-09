@@ -1,4 +1,5 @@
 const DEFAULT_PATIENT_APP_ID = '78d7b6cfd1c3480a950bb9a1f38e3afc'
+const DEFAULT_SESSION_APP_ID = '6784c6239a3048208ecd4f9ab1d79ebe'
 const DEFAULT_REPORT_APP_ID = '5335c37d57f94cae8324356af5117176'
 const MAX_BODY_BYTES = 24_000
 const requestBuckets = new Map()
@@ -37,7 +38,7 @@ async function callBailian(env, appId, prompt, bizParams) {
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 8_000)
+  const timer = setTimeout(() => controller.abort(), 15_000)
   try {
     const response = await fetch(
       `https://dashscope.aliyuncs.com/api/v1/apps/${appId}/completion`,
@@ -93,6 +94,15 @@ async function handleAiRequest(request, env, pathname) {
       return jsonResponse(result)
     }
 
+    if (pathname === '/api/ai/session') {
+      if (typeof body.query !== 'string' || body.query.length > 8_000) {
+        return jsonResponse({ error: 'INVALID_SESSION_INPUT' }, 400)
+      }
+      const appId = env.BAILIAN_SESSION_APP_ID || DEFAULT_SESSION_APP_ID
+      const result = await callBailian(env, appId, body.query)
+      return jsonResponse(result)
+    }
+
     const required = ['patientJson', 'stateJson', 'recordsJson']
     if (!required.every((key) => typeof body[key] === 'string')) {
       return jsonResponse({ error: 'INVALID_REPORT_INPUT' }, 400)
@@ -113,7 +123,11 @@ async function handleAiRequest(request, env, pathname) {
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url)
-    if (pathname === '/api/ai/patient' || pathname === '/api/ai/report') {
+    if (
+      pathname === '/api/ai/patient' ||
+      pathname === '/api/ai/session' ||
+      pathname === '/api/ai/report'
+    ) {
       return handleAiRequest(request, env, pathname)
     }
     return env.ASSETS.fetch(request)

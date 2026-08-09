@@ -12,6 +12,34 @@ export type AiPatientFingerprint = Pick<
   'name' | 'age' | 'painTolerance' | 'vascularDifficulty' | 'personality'
 >
 
+export type AiSessionChallenge = {
+  code: 'KEEP_TRUST' | 'LIMIT_PAIN' | 'LIMIT_BLEEDING' | 'HIT_COUNT'
+  target: number
+  title: string
+  description: string
+  successText: string
+  failText: string
+}
+
+export type AiSessionDialogueBank = Record<
+  'SUCCESS' | 'BLOOD' | 'NERVE' | 'BRUISE' | 'BONE',
+  [string, string]
+>
+
+export type AiMidpointEvent = {
+  triggerNeedle: 3
+  mood: 'CALM' | 'NERVOUS' | 'IMPRESSED' | 'SUSPICIOUS'
+  screenEffect: 'NONE' | 'HEARTBEAT' | 'COLD_FLASH' | 'WARM_GLOW'
+  dialog: string
+}
+
+export type AiTreatmentSession = {
+  patient: AiPatient
+  challenge: AiSessionChallenge
+  dialogueBank: AiSessionDialogueBank
+  midpointEvent: AiMidpointEvent
+}
+
 export type AiTreatmentReport = {
   satisfaction: number
   rating: 'S' | 'A' | 'B' | 'C' | 'D'
@@ -27,9 +55,9 @@ export type AiReportInput = {
 }
 
 const API_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL ?? '').replace(/\/$/, '')
-// Keep the browser timeout slightly above the proxy's 10 s upstream timeout,
+// Keep the browser timeout slightly above the proxy's 15 s upstream timeout,
 // otherwise a valid Bailian response can arrive after the UI has already fallen back.
-const REQUEST_TIMEOUT_MS = 12_000
+const REQUEST_TIMEOUT_MS = 18_000
 const PATIENT_AGE_RANGES = ['18～25', '26～35', '36～45', '46～60'] as const
 const PATIENT_PERSONALITY_DIRECTIONS = [
   '嘴硬但怕疼',
@@ -64,6 +92,55 @@ function isAiPatient(value: unknown): value is AiPatient {
     patient.vascularDifficulty <= 100 &&
     typeof patient.personality === 'string' &&
     typeof patient.openingDialog === 'string'
+  )
+}
+
+function isAiTreatmentSession(value: unknown): value is AiTreatmentSession {
+  if (!value || typeof value !== 'object') return false
+  const session = value as Record<string, unknown>
+  const challenge = session.challenge as Record<string, unknown> | undefined
+  const dialogueBank = session.dialogueBank as Record<string, unknown> | undefined
+  const midpointEvent = session.midpointEvent as Record<string, unknown> | undefined
+  const resultKeys = ['SUCCESS', 'BLOOD', 'NERVE', 'BRUISE', 'BONE'] as const
+
+  if (
+    !isAiPatient(session.patient) ||
+    !challenge ||
+    !dialogueBank ||
+    !midpointEvent
+  ) {
+    return false
+  }
+
+  return (
+    Array.from((session.patient as AiPatient).personality.trim()).length === 3 &&
+    (session.patient as AiPatient).personality.trim().endsWith('型') &&
+    typeof challenge.code === 'string' &&
+    ['KEEP_TRUST', 'LIMIT_PAIN', 'LIMIT_BLEEDING', 'HIT_COUNT'].includes(
+      challenge.code,
+    ) &&
+    Number.isInteger(challenge.target) &&
+    typeof challenge.title === 'string' &&
+    typeof challenge.description === 'string' &&
+    typeof challenge.successText === 'string' &&
+    typeof challenge.failText === 'string' &&
+    resultKeys.every((key) => {
+      const lines = dialogueBank[key]
+      return (
+        Array.isArray(lines) &&
+        lines.length === 2 &&
+        lines.every((line) => typeof line === 'string' && line.trim().length > 0)
+      )
+    }) &&
+    midpointEvent.triggerNeedle === 3 &&
+    typeof midpointEvent.mood === 'string' &&
+    ['CALM', 'NERVOUS', 'IMPRESSED', 'SUSPICIOUS'].includes(midpointEvent.mood) &&
+    typeof midpointEvent.screenEffect === 'string' &&
+    ['NONE', 'HEARTBEAT', 'COLD_FLASH', 'WARM_GLOW'].includes(
+      midpointEvent.screenEffect,
+    ) &&
+    typeof midpointEvent.dialog === 'string' &&
+    midpointEvent.dialog.trim().length > 0
   )
 }
 
@@ -190,6 +267,49 @@ async function requestAiPatientCandidate(
   })
   if (!isAiPatient(response)) throw new Error('Invalid AI patient response')
   return response
+}
+
+async function requestAiSessionCandidate(
+  recentPatients: AiPatientFingerprint[],
+  attempt: number,
+) {
+  const sessionSeed =
+    typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10)
+  const response = await postJson('/api/ai/session', {
+    query: JSON.stringify({
+      sessionSeed,
+      gameMode: 'SIMPLE_OR_CHALLENGE',
+      attempt,
+      recentPatients: recentPatients.slice(0, 5),
+    }),
+  })
+  if (!isAiTreatmentSession(response)) {
+    throw new Error('Invalid AI treatment session response')
+  }
+  return response
+}
+
+export async function requestAiTreatmentSession(
+  recentPatients: AiPatientFingerprint[] = [],
+): Promise<AiTreatmentSession> {
+  const firstSession = await requestAiSessionCandidate(recentPatients, 1)
+  const firstRepeated = isRepeatedPatient(firstSession.patient, recentPatients)
+  console.info('[Needle Roulette AI] session candidate', {
+    attempt: 1,
+    name: firstSession.patient.name,
+    age: firstSession.patient.age,
+    repeated: firstRepeated,
+  })
+  if (!firstRepeated) return firstSession
+
+  const retryHistory = [firstSession.patient, ...recentPatients].slice(0, 6)
+  const secondSession = await requestAiSessionCandidate(retryHistory, 2)
+  if (isRepeatedPatient(secondSession.patient, retryHistory)) {
+    throw new Error('Repeated AI session response after retry')
+  }
+  return secondSession
 }
 
 export async function requestAiPatient(

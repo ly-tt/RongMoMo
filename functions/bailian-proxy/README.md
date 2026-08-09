@@ -15,6 +15,7 @@ Required environment variables:
 ```text
 DASHSCOPE_API_KEY=<set only in Function Compute>
 BAILIAN_PATIENT_APP_ID=78d7b6cfd1c3480a950bb9a1f38e3afc
+BAILIAN_SESSION_APP_ID=6784c6239a3048208ecd4f9ab1d79ebe
 BAILIAN_REPORT_APP_ID=5335c37d57f94cae8324356af5117176
 ALLOWED_ORIGIN=https://rongmomo.lyshowcase.com
 DEBUG_AI_OUTPUT=false
@@ -48,4 +49,12 @@ Health endpoint:
 
 ```text
 GET /health
+```
+
+AI routes:
+
+```text
+POST /api/ai/session  # 完整疗程：患者、挑战、对白库和第三针事件
+POST /api/ai/patient  # 旧患者工作流，保留用于人工回滚
+POST /api/ai/report   # 五针结束后的疗程总结
 ```

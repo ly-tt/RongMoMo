@@ -4,12 +4,14 @@ import { randomUUID } from 'node:crypto'
 const PORT = Number(process.env.FC_SERVER_PORT || process.env.PORT || 9000)
 const PATIENT_APP_ID =
   process.env.BAILIAN_PATIENT_APP_ID || '78d7b6cfd1c3480a950bb9a1f38e3afc'
+const SESSION_APP_ID =
+  process.env.BAILIAN_SESSION_APP_ID || '6784c6239a3048208ecd4f9ab1d79ebe'
 const REPORT_APP_ID =
   process.env.BAILIAN_REPORT_APP_ID || '5335c37d57f94cae8324356af5117176'
 const ALLOWED_ORIGIN =
   process.env.ALLOWED_ORIGIN || 'https://rongmomo.lyshowcase.com'
 const MAX_BODY_BYTES = 24_000
-const REQUEST_TIMEOUT_MS = 10_000
+const REQUEST_TIMEOUT_MS = 15_000
 const REQUESTS_PER_MINUTE = 15
 const DEBUG_AI_OUTPUT = process.env.DEBUG_AI_OUTPUT === 'true'
 const requestBuckets = new Map()
@@ -130,6 +132,44 @@ function validateReport(value) {
   )
 }
 
+function validateSession(value) {
+  const challengeCodes = ['KEEP_TRUST', 'LIMIT_PAIN', 'LIMIT_BLEEDING', 'HIT_COUNT']
+  const moods = ['CALM', 'NERVOUS', 'IMPRESSED', 'SUSPICIOUS']
+  const screenEffects = ['NONE', 'HEARTBEAT', 'COLD_FLASH', 'WARM_GLOW']
+  const resultKeys = ['SUCCESS', 'BLOOD', 'NERVE', 'BRUISE', 'BONE']
+  const challenge = value?.challenge
+  const dialogueBank = value?.dialogueBank
+  const midpointEvent = value?.midpointEvent
+
+  return (
+    value &&
+    typeof value === 'object' &&
+    validatePatient(value.patient) &&
+    Array.from(value.patient.personality.trim()).length === 3 &&
+    value.patient.personality.trim().endsWith('型') &&
+    challenge &&
+    challengeCodes.includes(challenge.code) &&
+    Number.isInteger(challenge.target) &&
+    typeof challenge.title === 'string' &&
+    typeof challenge.description === 'string' &&
+    typeof challenge.successText === 'string' &&
+    typeof challenge.failText === 'string' &&
+    dialogueBank &&
+    resultKeys.every(
+      (key) =>
+        Array.isArray(dialogueBank[key]) &&
+        dialogueBank[key].length === 2 &&
+        dialogueBank[key].every(
+          (line) => typeof line === 'string' && line.trim().length > 0,
+        ),
+    ) &&
+    midpointEvent?.triggerNeedle === 3 &&
+    moods.includes(midpointEvent.mood) &&
+    screenEffects.includes(midpointEvent.screenEffect) &&
+    typeof midpointEvent.dialog === 'string'
+  )
+}
+
 async function callBailian(appId, prompt, bizParams, context) {
   const apiKey = process.env.DASHSCOPE_API_KEY
   if (!apiKey) {
@@ -243,6 +283,29 @@ async function handlePatient(request, requestId) {
   return patient
 }
 
+async function handleSession(request, requestId) {
+  const body = await readJsonBody(request)
+  if (typeof body.query !== 'string' || body.query.length > 8_000) {
+    const error = new Error('INVALID_SESSION_INPUT')
+    error.status = 400
+    throw error
+  }
+
+  const session = await callBailian(
+    SESSION_APP_ID,
+    body.query,
+    undefined,
+    { requestId, workflow: 'session' },
+  )
+
+  if (!validateSession(session)) {
+    const error = new Error('INVALID_SESSION_RESULT')
+    error.status = 502
+    throw error
+  }
+  return session
+}
+
 async function handleReport(request, requestId) {
   const body = await readJsonBody(request)
   const required = ['patientJson', 'stateJson', 'recordsJson']
@@ -330,6 +393,16 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, 200, result, origin, requestId)
     }
+    if (pathname === '/api/ai/session') {
+      const result = await handleSession(request, requestId)
+      logEvent('info', 'request_completed', {
+        requestId,
+        path: pathname,
+        status: 200,
+        durationMs: Date.now() - startedAt,
+      })
+      return sendJson(response, 200, result, origin, requestId)
+    }
     if (pathname === '/api/ai/report') {
       const result = await handleReport(request, requestId)
       logEvent('info', 'request_completed', {
@@ -347,11 +420,13 @@ const server = createServer(async (request, response) => {
       'PAYLOAD_TOO_LARGE',
       'INVALID_JSON',
       'INVALID_REPORT_INPUT',
+      'INVALID_SESSION_INPUT',
       'AI_NOT_CONFIGURED',
       'AI_UPSTREAM_FAILED',
       'INVALID_AI_RESPONSE',
       'INVALID_AI_JSON',
       'INVALID_PATIENT_RESULT',
+      'INVALID_SESSION_RESULT',
       'INVALID_REPORT_RESULT',
     ])
     const code = safeErrors.has(error?.message) ? error.message : 'INTERNAL_ERROR'

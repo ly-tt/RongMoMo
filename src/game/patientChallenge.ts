@@ -10,6 +10,8 @@ export type PatientChallenge = {
   description: string
   target: number
   accent: string
+  successText: string
+  failText: string
 }
 
 export type ChallengePatient = {
@@ -51,6 +53,8 @@ export function createPatientChallenge(
       description: '五针结束时疼痛值不超过 45',
       target: 45,
       accent: '#ff8aa5',
+      successText: '患者觉得你整局都很克制。',
+      failText: '患者认为这一局的手法太有存在感。',
     }
   }
 
@@ -61,6 +65,8 @@ export function createPatientChallenge(
       description: '五针结束时出血值不超过 30',
       target: 30,
       accent: '#ff5f7f',
+      successText: '红色警报没有占领整只手。',
+      failText: '红色特效成了本局绝对主角。',
     }
   }
 
@@ -71,6 +77,8 @@ export function createPatientChallenge(
       description: '五针结束时信任值保持在 60 以上',
       target: 60,
       accent: '#67edb0',
+      successText: '患者愿意把下次游戏也交给你。',
+      failText: '患者开始重新考虑你们的合作关系。',
     }
   }
 
@@ -80,6 +88,8 @@ export function createPatientChallenge(
     description: '五针内至少精准命中 3 次',
     target: 3,
     accent: '#77a7ff',
+    successText: '连续命中让患者刮目相看。',
+    failText: '患者建议你再熟悉一下这只模型手。',
   }
 }
 

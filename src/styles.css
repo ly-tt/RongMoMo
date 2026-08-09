@@ -1004,6 +1004,48 @@ h1 {
   pointer-events: none;
 }
 
+.midpoint-atmosphere {
+  position: fixed;
+  z-index: 12;
+  inset: 0;
+  pointer-events: none;
+}
+
+.midpoint-atmosphere.effect-heartbeat {
+  background: radial-gradient(circle, transparent 30%, rgba(255, 54, 95, 0.38));
+  animation: midpoint-heartbeat 900ms ease-in-out 2;
+}
+
+.midpoint-atmosphere.effect-cold-flash {
+  background: rgba(102, 151, 255, 0.22);
+  mix-blend-mode: screen;
+  animation: midpoint-flash 720ms ease-out both;
+}
+
+.midpoint-atmosphere.effect-warm-glow {
+  background: radial-gradient(circle at 50% 52%, rgba(255, 200, 106, 0.28), transparent 62%);
+  animation: midpoint-warmth 1.5s ease-in-out both;
+}
+
+@keyframes midpoint-heartbeat {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  35% { opacity: 1; transform: scale(1.025); }
+  55% { opacity: 0.35; transform: scale(1); }
+  72% { opacity: 0.86; transform: scale(1.014); }
+}
+
+@keyframes midpoint-flash {
+  0% { opacity: 0; }
+  18% { opacity: 1; }
+  100% { opacity: 0.14; }
+}
+
+@keyframes midpoint-warmth {
+  0% { opacity: 0; transform: scale(0.92); }
+  45% { opacity: 1; }
+  100% { opacity: 0.4; transform: scale(1.08); }
+}
+
 .impact-burst,
 .impact-speed-lines {
   position: absolute;
@@ -1450,6 +1492,48 @@ h1 {
   border-color: color-mix(in srgb, var(--result-color) 16%, transparent);
 }
 
+.midpoint-event {
+  --midpoint-color: #77a7ff;
+  margin: 0 0 14px;
+  padding: 13px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--midpoint-color) 32%, transparent);
+  border-radius: 15px;
+  text-align: left;
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--midpoint-color) 18%, transparent), transparent 50%),
+    color-mix(in srgb, var(--midpoint-color) 6%, #11131d);
+}
+
+.midpoint-event.mood-calm { --midpoint-color: #67edb0; }
+.midpoint-event.mood-nervous { --midpoint-color: #ff668a; }
+.midpoint-event.mood-impressed { --midpoint-color: #ffd36a; }
+.midpoint-event.mood-suspicious { --midpoint-color: #77a7ff; }
+
+.midpoint-event > span {
+  color: var(--midpoint-color);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.midpoint-event > strong {
+  color: #f3efe8;
+  font-size: 10px;
+}
+
+.midpoint-event > p {
+  grid-column: 1 / -1;
+  margin: 5px 0 0;
+  color: #d5d2d0;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.55;
+}
+
 .reaction-type {
   margin-bottom: 8px;
   border-color: color-mix(in srgb, var(--result-color) 24%, transparent);
@@ -1702,6 +1786,14 @@ h1 {
 .challenge-result small {
   color: #7d7f8e;
   font-size: 9px;
+}
+
+.challenge-result em {
+  margin-top: 3px;
+  color: #a9abb8;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.45;
 }
 
 .summary-shell > .patient-status {

@@ -3,10 +3,12 @@ import { ContactShadows, OrbitControls, useGLTF, useProgress } from '@react-thre
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
-  requestAiPatient,
+  requestAiTreatmentSession,
   requestAiTreatmentReport,
   type AiPatient,
   type AiPatientFingerprint,
+  type AiSessionChallenge,
+  type AiTreatmentSession,
 } from './services/aiService'
 import {
   createPatientChallenge,
@@ -193,6 +195,46 @@ function normalizePatientType(value: string) {
 function normalizePatientName(value: string) {
   const name = Array.from(value.trim().replace(/\s+/g, '')).slice(0, 4).join('')
   return name || '小王'
+}
+
+const DIRECTED_CHALLENGE_CONFIG: Record<
+  AiSessionChallenge['code'],
+  { kind: PatientChallenge['kind']; accent: string }
+> = {
+  KEEP_TRUST: { kind: 'TRUST_FLOOR', accent: '#67edb0' },
+  LIMIT_PAIN: { kind: 'PAIN_LIMIT', accent: '#ff8aa5' },
+  LIMIT_BLEEDING: { kind: 'BLEEDING_LIMIT', accent: '#ff5f7f' },
+  HIT_COUNT: { kind: 'PRECISION_COUNT', accent: '#77a7ff' },
+}
+
+const MIDPOINT_MOOD_LABELS: Record<
+  AiTreatmentSession['midpointEvent']['mood'],
+  string
+> = {
+  CALM: '逐渐放松',
+  NERVOUS: '开始紧张',
+  IMPRESSED: '刮目相看',
+  SUSPICIOUS: '保持怀疑',
+}
+
+function createDirectedChallenge(challenge: AiSessionChallenge): PatientChallenge {
+  const config = DIRECTED_CHALLENGE_CONFIG[challenge.code]
+  const targetRanges: Record<AiSessionChallenge['code'], [number, number]> = {
+    KEEP_TRUST: [55, 75],
+    LIMIT_PAIN: [40, 65],
+    LIMIT_BLEEDING: [20, 45],
+    HIT_COUNT: [1, 3],
+  }
+  const [minimum, maximum] = targetRanges[challenge.code]
+  return {
+    kind: config.kind,
+    title: challenge.title.trim().slice(0, 18),
+    description: challenge.description.trim().slice(0, 42),
+    target: Math.round(THREE.MathUtils.clamp(challenge.target, minimum, maximum)),
+    accent: config.accent,
+    successText: challenge.successText.trim().slice(0, 36),
+    failText: challenge.failText.trim().slice(0, 36),
+  }
 }
 
 const RESULT_IMPACT: Record<NeedleResult, StateDelta> = {
@@ -1856,7 +1898,7 @@ function HomePage({
       <div className="home-orb home-orb-two" aria-hidden="true" />
 
       <header className="home-header">
-        <p className="eyebrow">NEEDLE ROULETTE · AI PATIENT</p>
+        <p className="eyebrow">NEEDLE ROULETTE · AI SESSION</p>
         <span className="home-tag">移动端 3D 互动小游戏</span>
         <h1>一针<br />见血？</h1>
         <p>旋转手部寻找穴位，在五针之内赢得这位患者的信任。</p>
@@ -1879,7 +1921,7 @@ function HomePage({
                 <span>{patient.personality}</span>
               </div>
               <button type="button" onClick={onRegenerate} disabled={patientLoading}>
-                {patientLoading ? 'AI 生成中' : '换一位'}
+                {patientLoading ? 'AI 编排中' : '换一局'}
               </button>
             </div>
 
@@ -1910,7 +1952,7 @@ function HomePage({
             {patientLoading && (
               <div className="patient-refresh-overlay" role="status">
                 <span className="loading-pulse" />
-                正在生成新患者
+                正在编排新疗程
               </div>
             )}
           </>
@@ -1925,7 +1967,7 @@ function HomePage({
             </div>
             <span className="skeleton-block skeleton-dialog" />
             <span className="skeleton-block skeleton-traits" />
-            <small><span className="loading-pulse" />百炼正在生成本轮患者</small>
+            <small><span className="loading-pulse" />百炼正在编排完整疗程</small>
           </div>
         )}
       </section>
@@ -2246,6 +2288,9 @@ function TreatmentSummaryPage({
           <p>本局挑战 · {challengeProgress.resultText}</p>
           <strong>{challenge.title}</strong>
           <small>{challengeProgress.progressText}</small>
+          <em>
+            {challengeProgress.completed ? challenge.successText : challenge.failText}
+          </em>
         </div>
       </section>
 
@@ -2389,6 +2434,7 @@ function TreatmentSummaryPage({
 
 export default function App() {
   const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
+  const [directedSession, setDirectedSession] = useState<AiTreatmentSession | null>(null)
   const [patientSource, setPatientSource] = useState<'ai' | 'local'>('local')
   const [patientLoading, setPatientLoading] = useState(true)
   const [patientReady, setPatientReady] = useState(false)
@@ -2416,8 +2462,11 @@ export default function App() {
   const startedRef = useRef(false)
   const patientHistoryRef = useRef<AiPatientFingerprint[]>([])
   const patientChallenge = useMemo(
-    () => createPatientChallenge(patient),
-    [patient],
+    () =>
+      directedSession
+        ? createDirectedChallenge(directedSession.challenge)
+        : createPatientChallenge(patient),
+    [directedSession, patient],
   )
 
   const prepareTreatmentSummary = async (
@@ -2596,15 +2645,15 @@ export default function App() {
     ].slice(0, 5)
 
     try {
-      const generatedPatient = createPatientFromAi(
-        await requestAiPatient(recentPatients),
-      )
+      const generatedSession = await requestAiTreatmentSession(recentPatients)
+      const generatedPatient = createPatientFromAi(generatedSession.patient)
       if (patientRequestId.current !== requestId || startedRef.current) return
       patientHistoryRef.current = [
         createPatientFingerprint(generatedPatient),
         ...recentPatients,
       ].slice(0, 5)
       setPatient(generatedPatient)
+      setDirectedSession(generatedSession)
       setPatientSource('ai')
       setPatientReady(true)
       resetTreatment(generatedPatient)
@@ -2620,6 +2669,7 @@ export default function App() {
           ...patientHistoryRef.current,
         ].slice(0, 5)
         setPatient(fallbackPatient)
+        setDirectedSession(null)
         setPatientSource('local')
         setPatientReady(true)
         resetTreatment(fallbackPatient)
@@ -2657,10 +2707,13 @@ export default function App() {
   const activeDelta = hit
     ? getPatientImpact(hit.result, patient, hit.reaction)
     : null
+  const directedReaction = hit
+    ? directedSession?.dialogueBank[hit.result][(hit.needleNumber - 1) % 2]?.trim()
+    : ''
   const patientReaction = hit
-    ? hit.reaction.code === 'DE_QI'
+    ? directedReaction || (hit.reaction.code === 'DE_QI'
       ? getPatientReaction(patient, patientState, hit, treatmentHits)
-      : hit.reaction.patientLine
+      : hit.reaction.patientLine)
     : ''
   const challengeProgress = evaluatePatientChallenge(
     patientChallenge,
@@ -2678,6 +2731,10 @@ export default function App() {
     ? `reaction-${reaction.code.toLowerCase().replaceAll('_', '-')}`
     : ''
   const isChallengeMode = gameMode === 'CHALLENGE'
+  const midpointEvent = directedSession?.midpointEvent ?? null
+  const isMidpointActive = Boolean(
+    hit && midpointEvent && hit.needleNumber === midpointEvent.triggerNeedle,
+  )
   const successStreak = getSuccessStreak(treatmentHits)
   const chargeInstruction =
     needleCharge.progress < 0.2
@@ -2722,8 +2779,18 @@ export default function App() {
         impactActive ? activeReactionClass : ''
       } ${
         treatmentStress >= 0.35 ? 'state-stressed' : ''
+      } ${
+        isMidpointActive && midpointEvent
+          ? `midpoint-effect-${midpointEvent.screenEffect.toLowerCase().replaceAll('_', '-')}`
+          : ''
       }`}
     >
+      {isMidpointActive && midpointEvent && impactActive && (
+        <div
+          className={`midpoint-atmosphere effect-${midpointEvent.screenEffect.toLowerCase().replaceAll('_', '-')}`}
+          aria-hidden="true"
+        />
+      )}
       {hit && impactActive && (
         <div className="screen-effect" aria-hidden="true">
           <div className="impact-burst" />
@@ -2916,6 +2983,13 @@ export default function App() {
               <span>{patient.name}</span>
               “{patientReaction}”
             </blockquote>
+            {isMidpointActive && midpointEvent && (
+              <div className={`midpoint-event mood-${midpointEvent.mood.toLowerCase()}`}>
+                <span>AI 中场事件 · 第三针</span>
+                <strong>{MIDPOINT_MOOD_LABELS[midpointEvent.mood]}</strong>
+                <p>“{midpointEvent.dialog}”</p>
+              </div>
+            )}
             <div className="knowledge-card">
               <strong>{activeTarget.code} · {activeTarget.name}</strong>
               <em>{activeTarget.meridian}</em>
