@@ -443,9 +443,14 @@ DASHSCOPE_WORKSPACE_ID=<非默认百炼 Workspace ID>
 
 ## 截图
 
-<img width="389" height="656" alt="《一针见血？》移动端首页" src="https://github.com/user-attachments/assets/ea3d4b9c-6035-4ee9-bcce-7efa03995d17" />
-<img width="367" height="643" alt="《一针见血？》3D 游戏页面" src="https://github.com/user-attachments/assets/db7d5c5f-f1a0-4f26-84e1-ad243f7ae958" />
-<img width="715" height="1294" alt="《一针见血？》疗程反馈页面" src="https://github.com/user-attachments/assets/4ac20ada-25c6-43e0-aa88-0566af6961e6" />
+<img width="750" height="1346" alt="image" src="https://github.com/user-attachments/assets/2d10cb33-e859-4dc3-abd7-9efcf47ec10a" />
+<img width="750" height="1346" alt="image" src="https://github.com/user-attachments/assets/050622cd-b2d4-4898-bacc-d3b6f4dc0f0f" />
+<img width="750" height="1346" alt="image" src="https://github.com/user-attachments/assets/c53d52f5-73fa-4999-90c7-0233a8f96e49" />
+<img width="750" height="1346" alt="image" src="https://github.com/user-attachments/assets/5248e700-331e-4de2-9830-f2d0bad7c154" />
+<img width="750" height="1346" alt="image" src="https://github.com/user-attachments/assets/1bde6cb9-7353-4e17-a180-dafb1a9be7c2" />
+<img width="869" height="2567" alt="image" src="https://github.com/user-attachments/assets/25987129-f0c9-42a1-bfd0-1ee161a28be4" />
+<img width="862" height="1332" alt="image" src="https://github.com/user-attachments/assets/5b7a76a3-ef01-4570-a260-57c14b13b861" />
+
 
 ## 3D 模型来源
 
