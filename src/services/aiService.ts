@@ -394,9 +394,21 @@ export async function requestAiTreatmentSession(
     age: firstSession.patient.age,
     repeated: firstRepeated,
   })
-  // Session generation runs in the background. Do not silently queue a second
-  // minute-long workflow here; the next prefetch will get another random seed.
-  return firstSession
+  if (!firstRepeated) return firstSession
+
+  const retryHistory = [firstSession.patient, ...recentPatients].slice(0, 6)
+  const secondSession = await requestAiSessionCandidate(retryHistory, 2)
+  const secondRepeated = isRepeatedPatient(secondSession.patient, retryHistory)
+  console.info('[Needle Roulette AI] session candidate', {
+    attempt: 2,
+    name: secondSession.patient.name,
+    age: secondSession.patient.age,
+    repeated: secondRepeated,
+  })
+  if (secondRepeated) {
+    throw new Error('Repeated AI session response after retry')
+  }
+  return secondSession
 }
 
 export async function requestAiPatient(
