@@ -12,7 +12,7 @@ const ALLOWED_ORIGIN =
   process.env.ALLOWED_ORIGIN || 'https://rongmomo.lyshowcase.com'
 const MAX_BODY_BYTES = 24_000
 const REQUEST_TIMEOUT_MS = 25_000
-const REQUESTS_PER_MINUTE = 15
+const REQUESTS_PER_MINUTE = 30
 const DEBUG_AI_OUTPUT = process.env.DEBUG_AI_OUTPUT === 'true'
 const requestBuckets = new Map()
 
@@ -32,7 +32,7 @@ function setCorsHeaders(response, origin) {
     response.setHeader('Access-Control-Allow-Origin', origin)
     response.setHeader('Vary', 'Origin')
   }
-  response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   response.setHeader('Access-Control-Max-Age', '86400')
 }
@@ -276,6 +276,104 @@ async function callBailian(appId, prompt, bizParams, context) {
   }
 }
 
+function getBailianHeaders() {
+  const apiKey = process.env.DASHSCOPE_API_KEY
+  if (!apiKey) {
+    const error = new Error('AI_NOT_CONFIGURED')
+    error.status = 503
+    throw error
+  }
+
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  }
+  if (process.env.DASHSCOPE_WORKSPACE_ID) {
+    headers['X-DashScope-WorkSpace'] = process.env.DASHSCOPE_WORKSPACE_ID
+  }
+  return headers
+}
+
+function getAsyncSessionUrl(taskId = '') {
+  const base = `https://dashscope.aliyuncs.com/api/v2/apps/agent/${SESSION_APP_ID}/compatible-mode/v1/responses`
+  return taskId ? `${base}/${encodeURIComponent(taskId)}` : base
+}
+
+async function fetchAsyncSession(url, options, context) {
+  const startedAt = Date.now()
+  let response
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: getBailianHeaders(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') {
+      logEvent('error', 'ai_async_upstream_timeout', {
+        ...context,
+        durationMs: Date.now() - startedAt,
+      })
+      const error = new Error('AI_UPSTREAM_TIMEOUT')
+      error.status = 504
+      throw error
+    }
+    throw cause
+  }
+
+  if (!response.ok) {
+    logEvent('error', 'ai_async_upstream_failed', {
+      ...context,
+      upstreamStatus: response.status,
+      durationMs: Date.now() - startedAt,
+    })
+    const error = new Error('AI_UPSTREAM_FAILED')
+    error.status = 502
+    throw error
+  }
+
+  return response.json()
+}
+
+async function createAsyncSessionTask(query, context) {
+  const payload = await fetchAsyncSession(
+    getAsyncSessionUrl(),
+    {
+      method: 'POST',
+      body: JSON.stringify({ input: query, background: true }),
+    },
+    context,
+  )
+  if (typeof payload?.id !== 'string' || typeof payload?.status !== 'string') {
+    const error = new Error('INVALID_AI_RESPONSE')
+    error.status = 502
+    throw error
+  }
+  return { taskId: payload.id, status: payload.status }
+}
+
+function extractAsyncSessionResult(payload) {
+  const text = payload?.output
+    ?.flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+    .filter((item) => item?.type === 'output_text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join('')
+
+  if (!text) {
+    const error = new Error('INVALID_AI_RESPONSE')
+    error.status = 502
+    throw error
+  }
+
+  try {
+    return parseModelJson(text)
+  } catch {
+    const error = new Error('INVALID_AI_JSON')
+    error.status = 502
+    throw error
+  }
+}
+
 async function handlePatient(request, requestId) {
   const body = await readJsonBody(request)
   const patientRequest =
@@ -297,7 +395,7 @@ async function handlePatient(request, requestId) {
   return patient
 }
 
-async function handleSession(request, requestId) {
+async function handleSessionSubmit(request, requestId) {
   const body = await readJsonBody(request)
   if (typeof body.query !== 'string' || body.query.length > 8_000) {
     const error = new Error('INVALID_SESSION_INPUT')
@@ -305,19 +403,47 @@ async function handleSession(request, requestId) {
     throw error
   }
 
-  const session = await callBailian(
-    SESSION_APP_ID,
-    body.query,
-    undefined,
-    { requestId, workflow: 'session' },
-  )
+  return createAsyncSessionTask(body.query, {
+    requestId,
+    workflow: 'session',
+    operation: 'create',
+  })
+}
 
+async function handleSessionStatus(taskId, requestId) {
+  if (!/^[A-Za-z0-9_-]{10,128}$/.test(taskId)) {
+    const error = new Error('INVALID_SESSION_TASK_ID')
+    error.status = 400
+    throw error
+  }
+
+  const payload = await fetchAsyncSession(
+    getAsyncSessionUrl(taskId),
+    { method: 'GET' },
+    { requestId, workflow: 'session', operation: 'retrieve', taskId },
+  )
+  const status = typeof payload?.status === 'string' ? payload.status : ''
+  if (['queued', 'in_progress', 'running'].includes(status)) {
+    return { pending: true, taskId, status }
+  }
+  if (status === 'failed' || status === 'cancelled') {
+    const error = new Error('AI_SESSION_TASK_FAILED')
+    error.status = 502
+    throw error
+  }
+  if (status !== 'completed') {
+    const error = new Error('INVALID_AI_RESPONSE')
+    error.status = 502
+    throw error
+  }
+
+  const session = extractAsyncSessionResult(payload)
   if (!validateSession(session)) {
     const error = new Error('INVALID_SESSION_RESULT')
     error.status = 502
     throw error
   }
-  return session
+  return { pending: false, session }
 }
 
 async function handleReport(request, requestId) {
@@ -357,6 +483,7 @@ const server = createServer(async (request, response) => {
   const startedAt = Date.now()
   const origin = request.headers.origin || ''
   const pathname = new URL(request.url || '/', 'http://localhost').pathname
+  const sessionTaskMatch = pathname.match(/^\/api\/ai\/session\/([^/]+)$/)
 
   if (request.method === 'OPTIONS') {
     if (origin && origin !== ALLOWED_ORIGIN) {
@@ -383,7 +510,8 @@ const server = createServer(async (request, response) => {
   if (origin && origin !== ALLOWED_ORIGIN) {
     return sendJson(response, 403, { error: 'ORIGIN_NOT_ALLOWED' }, origin, requestId)
   }
-  if (request.method !== 'POST') {
+  const isSessionStatusRequest = Boolean(sessionTaskMatch && request.method === 'GET')
+  if (request.method !== 'POST' && !isSessionStatusRequest) {
     return sendJson(response, 405, { error: 'METHOD_NOT_ALLOWED' }, origin, requestId)
   }
   if (!allowRequest(request)) {
@@ -408,14 +536,34 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, result, origin, requestId)
     }
     if (pathname === '/api/ai/session') {
-      const result = await handleSession(request, requestId)
+      const result = await handleSessionSubmit(request, requestId)
       logEvent('info', 'request_completed', {
         requestId,
         path: pathname,
-        status: 200,
+        status: 202,
         durationMs: Date.now() - startedAt,
       })
-      return sendJson(response, 200, result, origin, requestId)
+      return sendJson(response, 202, result, origin, requestId)
+    }
+    if (sessionTaskMatch) {
+      const result = await handleSessionStatus(sessionTaskMatch[1], requestId)
+      const status = result.pending ? 202 : 200
+      logEvent('info', 'request_completed', {
+        requestId,
+        path: pathname,
+        status,
+        taskStatus: result.pending ? result.status : 'completed',
+        durationMs: Date.now() - startedAt,
+      })
+      return sendJson(
+        response,
+        status,
+        result.pending
+          ? { taskId: result.taskId, status: result.status }
+          : result.session,
+        origin,
+        requestId,
+      )
     }
     if (pathname === '/api/ai/report') {
       const result = await handleReport(request, requestId)
@@ -435,9 +583,11 @@ const server = createServer(async (request, response) => {
       'INVALID_JSON',
       'INVALID_REPORT_INPUT',
       'INVALID_SESSION_INPUT',
+      'INVALID_SESSION_TASK_ID',
       'AI_NOT_CONFIGURED',
       'AI_UPSTREAM_FAILED',
       'AI_UPSTREAM_TIMEOUT',
+      'AI_SESSION_TASK_FAILED',
       'INVALID_AI_RESPONSE',
       'INVALID_AI_JSON',
       'INVALID_PATIENT_RESULT',

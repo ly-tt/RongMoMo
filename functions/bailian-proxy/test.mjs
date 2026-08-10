@@ -65,6 +65,13 @@ try {
   const sessionError = await session.json()
   assert.equal(sessionError.error, 'AI_NOT_CONFIGURED')
 
+  const invalidTask = await fetch('http://127.0.0.1:19000/api/ai/session/bad', {
+    headers: { Origin: 'https://rongmomo.lyshowcase.com' },
+  })
+  assert.equal(invalidTask.status, 400)
+  const invalidTaskError = await invalidTask.json()
+  assert.equal(invalidTaskError.error, 'INVALID_SESSION_TASK_ID')
+
   console.log('Bailian proxy tests passed')
 } finally {
   child.kill()

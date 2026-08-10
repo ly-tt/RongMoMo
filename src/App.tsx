@@ -3,6 +3,9 @@ import { ContactShadows, OrbitControls, useGLTF, useProgress } from '@react-thre
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
+  cacheAiTreatmentSession,
+  clearCachedAiTreatmentSession,
+  readCachedAiTreatmentSession,
   requestAiTreatmentSession,
   requestAiTreatmentReport,
   type AiPatient,
@@ -1879,7 +1882,7 @@ function HomePage({
   patient,
   challenge,
   patientSource,
-  patientLoading,
+  nextSessionStatus,
   patientReady,
   onRegenerate,
   onStart,
@@ -1887,7 +1890,7 @@ function HomePage({
   patient: PatientProfile
   challenge: PatientChallenge
   patientSource: 'ai' | 'local'
-  patientLoading: boolean
+  nextSessionStatus: AiContentStatus
   patientReady: boolean
   onRegenerate: () => void
   onStart: (mode: GameMode) => void
@@ -1905,9 +1908,8 @@ function HomePage({
       </header>
 
       <section
-        className={`patient-card ${patientLoading && patientReady ? 'is-refreshing' : ''}`}
+        className="patient-card"
         aria-label="本轮虚拟患者"
-        aria-busy={patientLoading}
       >
         {patientReady ? (
           <>
@@ -1920,8 +1922,8 @@ function HomePage({
                 <h2>{patient.name} <small>{patient.age} 岁</small></h2>
                 <span>{patient.personality}</span>
               </div>
-              <button type="button" onClick={onRegenerate} disabled={patientLoading}>
-                {patientLoading ? 'AI 编排中' : '换一局'}
+              <button type="button" onClick={onRegenerate}>
+                换一局
               </button>
             </div>
 
@@ -1949,12 +1951,6 @@ function HomePage({
                 <small>{challenge.description}</small>
               </div>
             </div>
-            {patientLoading && (
-              <div className="patient-refresh-overlay" role="status">
-                <span className="loading-pulse" />
-                正在编排新疗程
-              </div>
-            )}
           </>
         ) : (
           <div className="patient-skeleton" role="status">
@@ -1977,7 +1973,7 @@ function HomePage({
           className="mode-entry mode-entry-simple"
           type="button"
           onClick={() => onStart('SIMPLE')}
-          disabled={!patientReady || patientLoading}
+          disabled={!patientReady}
         >
           <span>简单版</span>
           <strong>轻触下针</strong>
@@ -1987,7 +1983,7 @@ function HomePage({
           className="mode-entry mode-entry-challenge"
           type="button"
           onClick={() => onStart('CHALLENGE')}
-          disabled={!patientReady || patientLoading}
+          disabled={!patientReady}
         >
           <span>挑战版</span>
           <strong>按住蓄针</strong>
@@ -1996,11 +1992,16 @@ function HomePage({
       </section>
 
       <p className="home-disclaimer">
-        {!patientReady
-          ? '正在连接阿里云百炼。'
-          : patientSource === 'ai'
-            ? '患者由阿里云百炼生成。'
-            : '百炼未返回可用的新患者，已使用本地候选。'}
+        {patientSource === 'ai'
+          ? '患者与本局剧情由阿里云百炼生成。'
+          : '当前使用本地候选患者。'}
+        {nextSessionStatus === 'loading'
+          ? ' AI 正在后台准备下一局。'
+          : nextSessionStatus === 'success'
+            ? ' 下一局 AI 疗程已就绪。'
+            : nextSessionStatus === 'fallback'
+              ? ' AI 暂时不可用，下次切换时会继续尝试。'
+              : ''}
         本作品不是医学训练软件。
       </p>
     </main>
@@ -2433,11 +2434,20 @@ function TreatmentSummaryPage({
 }
 
 export default function App() {
-  const [patient, setPatient] = useState<PatientProfile>(() => createLocalPatient())
-  const [directedSession, setDirectedSession] = useState<AiTreatmentSession | null>(null)
-  const [patientSource, setPatientSource] = useState<'ai' | 'local'>('local')
-  const [patientLoading, setPatientLoading] = useState(true)
-  const [patientReady, setPatientReady] = useState(false)
+  const [initialSession] = useState<AiTreatmentSession | null>(() =>
+    readCachedAiTreatmentSession(),
+  )
+  const [patient, setPatient] = useState<PatientProfile>(() =>
+    initialSession ? createPatientFromAi(initialSession.patient) : createLocalPatient(),
+  )
+  const [directedSession, setDirectedSession] = useState<AiTreatmentSession | null>(
+    initialSession,
+  )
+  const [patientSource, setPatientSource] = useState<'ai' | 'local'>(
+    initialSession ? 'ai' : 'local',
+  )
+  const [nextSessionStatus, setNextSessionStatus] = useState<AiContentStatus>('idle')
+  const patientReady = true
   const [started, setStarted] = useState(false)
   const [gameMode, setGameMode] = useState<GameMode>('SIMPLE')
   const [hit, setHit] = useState<Hit | null>(null)
@@ -2457,10 +2467,12 @@ export default function App() {
   )
   const [treatmentSummary, setTreatmentSummary] = useState<TreatmentSummary | null>(null)
   const [summaryStatus, setSummaryStatus] = useState<AiContentStatus>('idle')
-  const patientRequestId = useRef(0)
   const summaryRequestId = useRef(0)
-  const startedRef = useRef(false)
-  const patientHistoryRef = useRef<AiPatientFingerprint[]>([])
+  const patientHistoryRef = useRef<AiPatientFingerprint[]>([
+    createPatientFingerprint(patient),
+  ])
+  const nextSessionRef = useRef<AiTreatmentSession | null>(null)
+  const sessionPrefetchInFlightRef = useRef(false)
   const patientChallenge = useMemo(
     () =>
       directedSession
@@ -2629,11 +2641,24 @@ export default function App() {
     setSessionTargets(createTreatmentPlan())
   }
 
-  const regeneratePatient = async (replaceCurrent = false) => {
-    const requestId = patientRequestId.current + 1
-    patientRequestId.current = requestId
-    setPatientLoading(true)
-    if (replaceCurrent) setPatientReady(false)
+  const prepareNextAiSession = async (recentPatients: AiPatientFingerprint[]) => {
+    if (nextSessionRef.current || sessionPrefetchInFlightRef.current) return
+    sessionPrefetchInFlightRef.current = true
+    setNextSessionStatus('loading')
+    try {
+      const generatedSession = await requestAiTreatmentSession(recentPatients)
+      nextSessionRef.current = generatedSession
+      cacheAiTreatmentSession(generatedSession)
+      setNextSessionStatus('success')
+    } catch (error) {
+      console.warn('[Needle Roulette AI] session prefetch fallback', error)
+      setNextSessionStatus('fallback')
+    } finally {
+      sessionPrefetchInFlightRef.current = false
+    }
+  }
+
+  const switchToNextPatient = () => {
     const currentFingerprint = createPatientFingerprint(patient)
     const recentPatients = [
       currentFingerprint,
@@ -2643,62 +2668,53 @@ export default function App() {
           item.age !== currentFingerprint.age,
       ),
     ].slice(0, 5)
+    const preparedSession =
+      nextSessionRef.current ?? readCachedAiTreatmentSession()
 
-    try {
-      const generatedSession = await requestAiTreatmentSession(recentPatients)
-      const generatedPatient = createPatientFromAi(generatedSession.patient)
-      if (patientRequestId.current !== requestId || startedRef.current) return
-      patientHistoryRef.current = [
-        createPatientFingerprint(generatedPatient),
-        ...recentPatients,
-      ].slice(0, 5)
-      setPatient(generatedPatient)
-      setDirectedSession(generatedSession)
+    let nextPatient: PatientProfile
+    if (preparedSession) {
+      nextPatient = createPatientFromAi(preparedSession.patient)
+      nextSessionRef.current = null
+      clearCachedAiTreatmentSession()
+      setNextSessionStatus('idle')
+      setDirectedSession(preparedSession)
       setPatientSource('ai')
-      setPatientReady(true)
-      resetTreatment(generatedPatient)
-    } catch (error) {
-      console.warn('[Needle Roulette AI] patient fallback', error)
-      if (patientRequestId.current !== requestId || startedRef.current) return
-      if (replaceCurrent || !patientReady) {
-        const fallbackPatient = createLocalPatient(
-          recentPatients.map((item) => item.name),
-        )
-        patientHistoryRef.current = [
-          createPatientFingerprint(fallbackPatient),
-          ...patientHistoryRef.current,
-        ].slice(0, 5)
-        setPatient(fallbackPatient)
-        setDirectedSession(null)
-        setPatientSource('local')
-        setPatientReady(true)
-        resetTreatment(fallbackPatient)
-      }
-    } finally {
-      if (patientRequestId.current === requestId) setPatientLoading(false)
+    } else {
+      nextPatient = createLocalPatient(recentPatients.map((item) => item.name))
+      setDirectedSession(null)
+      setPatientSource('local')
+    }
+
+    const nextHistory = [
+      createPatientFingerprint(nextPatient),
+      ...recentPatients,
+    ].slice(0, 5)
+    patientHistoryRef.current = nextHistory
+    setPatient(nextPatient)
+    resetTreatment(nextPatient)
+    setStarted(false)
+
+    if (!sessionPrefetchInFlightRef.current) {
+      void prepareNextAiSession(nextHistory)
     }
   }
 
   const startTreatment = (mode: GameMode) => {
-    if (patientLoading || !patientReady) return
+    if (!patientReady) return
     if (soundEnabled) playInterfaceSound('start')
-    startedRef.current = true
-    patientRequestId.current += 1
     setGameMode(mode)
-    setPatientLoading(false)
     resetTreatment(patient)
     setStarted(true)
   }
 
   const restartTreatment = () => {
-    startedRef.current = false
-    setStarted(false)
-    void regeneratePatient(true)
+    switchToNextPatient()
   }
 
   useEffect(() => {
-    void regeneratePatient(true)
-    // Generate once on mount; later requests are user initiated.
+    if (initialSession) clearCachedAiTreatmentSession()
+    void prepareNextAiSession(patientHistoryRef.current)
+    // Consume any prepared session once, then always prepare the following round.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -2750,9 +2766,9 @@ export default function App() {
         patient={patient}
         challenge={patientChallenge}
         patientSource={patientSource}
-        patientLoading={patientLoading}
+        nextSessionStatus={nextSessionStatus}
         patientReady={patientReady}
-        onRegenerate={regeneratePatient}
+        onRegenerate={switchToNextPatient}
         onStart={startTreatment}
       />
     )

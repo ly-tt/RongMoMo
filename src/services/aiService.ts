@@ -55,9 +55,11 @@ export type AiReportInput = {
 }
 
 const API_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL ?? '').replace(/\/$/, '')
-// Keep the browser timeout slightly above the proxy's 25 s upstream timeout,
-// otherwise a valid Bailian response can arrive after the UI has already fallen back.
 const REQUEST_TIMEOUT_MS = 28_000
+const SESSION_POLL_INTERVAL_MS = 5_000
+const SESSION_POLL_TIMEOUT_MS = 100_000
+const SESSION_CACHE_KEY = 'needle-roulette:next-ai-session:v1'
+const SESSION_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1_000
 const PATIENT_AGE_RANGES = ['18～25', '26～35', '36～45', '46～60'] as const
 const PATIENT_PERSONALITY_DIRECTIONS = [
   '嘴硬但怕疼',
@@ -159,15 +161,16 @@ function isAiTreatmentReport(value: unknown): value is AiTreatmentReport {
   )
 }
 
-async function postJson(path: string, body: unknown): Promise<unknown> {
+async function requestJson(
+  path: string,
+  init: RequestInit,
+): Promise<{ payload: unknown; status: number; requestId: string }> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      ...init,
       signal: controller.signal,
       cache: 'no-store',
     })
@@ -180,10 +183,68 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
         `AI request failed: path=${path} status=${response.status} code=${serverCode} requestId=${requestId}`,
       )
     }
-    console.info(`[Needle Roulette AI] ${path} completed requestId=${requestId}`)
-    return await response.json()
+    return {
+      payload: await response.json(),
+      status: response.status,
+      requestId,
+    }
   } finally {
     window.clearTimeout(timer)
+  }
+}
+
+async function postJson(path: string, body: unknown): Promise<unknown> {
+  const response = await requestJson(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  console.info(
+    `[Needle Roulette AI] ${path} completed requestId=${response.requestId}`,
+  )
+  return response.payload
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+export function readCachedAiTreatmentSession(): AiTreatmentSession | null {
+  try {
+    const raw = window.localStorage.getItem(SESSION_CACHE_KEY)
+    if (!raw) return null
+    const cached = JSON.parse(raw) as { createdAt?: unknown; session?: unknown }
+    if (
+      !isFiniteNumber(cached.createdAt) ||
+      Date.now() - cached.createdAt > SESSION_CACHE_MAX_AGE_MS ||
+      !isAiTreatmentSession(cached.session)
+    ) {
+      clearCachedAiTreatmentSession()
+      return null
+    }
+    return cached.session
+  } catch {
+    clearCachedAiTreatmentSession()
+    return null
+  }
+}
+
+export function cacheAiTreatmentSession(session: AiTreatmentSession) {
+  try {
+    window.localStorage.setItem(
+      SESSION_CACHE_KEY,
+      JSON.stringify({ createdAt: Date.now(), session }),
+    )
+  } catch {
+    // The in-memory cache remains available when storage is blocked or full.
+  }
+}
+
+export function clearCachedAiTreatmentSession() {
+  try {
+    window.localStorage.removeItem(SESSION_CACHE_KEY)
+  } catch {
+    // Storage can be unavailable in strict privacy modes.
   }
 }
 
@@ -277,7 +338,7 @@ async function requestAiSessionCandidate(
     typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID().slice(0, 8)
       : Math.random().toString(36).slice(2, 10)
-  const response = await postJson('/api/ai/session', {
+  const submitted = await postJson('/api/ai/session', {
     query: JSON.stringify({
       sessionSeed,
       gameMode: 'SIMPLE_OR_CHALLENGE',
@@ -285,10 +346,41 @@ async function requestAiSessionCandidate(
       recentPatients: recentPatients.slice(0, 5),
     }),
   })
-  if (!isAiTreatmentSession(response)) {
-    throw new Error('Invalid AI treatment session response')
+  if (
+    !submitted ||
+    typeof submitted !== 'object' ||
+    typeof (submitted as Record<string, unknown>).taskId !== 'string'
+  ) {
+    throw new Error('Invalid AI session task response')
   }
-  return response
+
+  const taskId = (submitted as { taskId: string }).taskId
+  const deadline = Date.now() + SESSION_POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    await wait(SESSION_POLL_INTERVAL_MS)
+    const polled = await requestJson(
+      `/api/ai/session/${encodeURIComponent(taskId)}`,
+      { method: 'GET' },
+    )
+    if (polled.status === 200 && isAiTreatmentSession(polled.payload)) {
+      console.info(
+        `[Needle Roulette AI] async session completed requestId=${polled.requestId}`,
+      )
+      return polled.payload
+    }
+    const taskStatus =
+      polled.payload && typeof polled.payload === 'object'
+        ? (polled.payload as Record<string, unknown>).status
+        : null
+    if (
+      polled.status !== 202 ||
+      typeof taskStatus !== 'string' ||
+      !['queued', 'in_progress', 'running'].includes(taskStatus)
+    ) {
+      throw new Error('Invalid AI treatment session response')
+    }
+  }
+  throw new Error('AI treatment session polling timed out')
 }
 
 export async function requestAiTreatmentSession(
@@ -302,14 +394,9 @@ export async function requestAiTreatmentSession(
     age: firstSession.patient.age,
     repeated: firstRepeated,
   })
-  if (!firstRepeated) return firstSession
-
-  const retryHistory = [firstSession.patient, ...recentPatients].slice(0, 6)
-  const secondSession = await requestAiSessionCandidate(retryHistory, 2)
-  if (isRepeatedPatient(secondSession.patient, retryHistory)) {
-    throw new Error('Repeated AI session response after retry')
-  }
-  return secondSession
+  // Session generation runs in the background. Do not silently queue a second
+  // minute-long workflow here; the next prefetch will get another random seed.
+  return firstSession
 }
 
 export async function requestAiPatient(

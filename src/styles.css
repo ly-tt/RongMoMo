@@ -237,25 +237,6 @@ h1 {
   backdrop-filter: blur(16px);
 }
 
-.patient-card.is-refreshing > :not(.patient-refresh-overlay) {
-  opacity: 0.44;
-}
-
-.patient-refresh-overlay {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #dedbe0;
-  background: rgba(8, 10, 18, 0.48);
-  backdrop-filter: blur(3px);
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .loading-pulse {
   width: 7px;
   height: 7px;

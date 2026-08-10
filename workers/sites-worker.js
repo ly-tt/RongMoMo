@@ -18,10 +18,56 @@ function allowRequest(request) {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown'
   const now = Date.now()
   const recent = (requestBuckets.get(ip) || []).filter((time) => now - time < 60_000)
-  if (recent.length >= 12) return false
+  if (recent.length >= 30) return false
   recent.push(now)
   requestBuckets.set(ip, recent)
   return true
+}
+
+function bailianHeaders(env) {
+  if (!env.DASHSCOPE_API_KEY) throw new Error('AI_NOT_CONFIGURED')
+  const headers = {
+    Authorization: `Bearer ${env.DASHSCOPE_API_KEY}`,
+    'Content-Type': 'application/json',
+  }
+  if (env.DASHSCOPE_WORKSPACE_ID) {
+    headers['X-DashScope-WorkSpace'] = env.DASHSCOPE_WORKSPACE_ID
+  }
+  return headers
+}
+
+function asyncSessionUrl(appId, taskId = '') {
+  const base = `https://dashscope.aliyuncs.com/api/v2/apps/agent/${appId}/compatible-mode/v1/responses`
+  return taskId ? `${base}/${encodeURIComponent(taskId)}` : base
+}
+
+async function callAsyncSession(env, appId, taskId, input) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 25_000)
+  try {
+    const response = await fetch(asyncSessionUrl(appId, taskId), {
+      method: taskId ? 'GET' : 'POST',
+      headers: bailianHeaders(env),
+      ...(taskId
+        ? {}
+        : { body: JSON.stringify({ input, background: true }) }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`BAILIAN_${response.status}`)
+    return response.json()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function extractAsyncOutput(payload) {
+  const text = payload?.output
+    ?.flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+    .filter((item) => item?.type === 'output_text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join('')
+  if (!text) throw new Error('INVALID_BAILIAN_RESPONSE')
+  return parseModelJson(text)
 }
 
 function parseModelJson(text) {
@@ -70,17 +116,22 @@ async function callBailian(env, appId, prompt, bizParams) {
 }
 
 async function handleAiRequest(request, env, pathname) {
-  if (request.method !== 'POST') return jsonResponse({ error: 'METHOD_NOT_ALLOWED' }, 405)
+  const sessionTaskMatch = pathname.match(/^\/api\/ai\/session\/([^/]+)$/)
+  const isSessionStatusRequest = Boolean(sessionTaskMatch && request.method === 'GET')
+  if (request.method !== 'POST' && !isSessionStatusRequest) {
+    return jsonResponse({ error: 'METHOD_NOT_ALLOWED' }, 405)
+  }
   if (!allowRequest(request)) return jsonResponse({ error: 'RATE_LIMITED' }, 429)
 
-  const rawBody = await request.text()
-  if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ error: 'PAYLOAD_TOO_LARGE' }, 413)
-
-  let body
-  try {
-    body = JSON.parse(rawBody)
-  } catch {
-    return jsonResponse({ error: 'INVALID_JSON' }, 400)
+  let body = null
+  if (request.method === 'POST') {
+    const rawBody = await request.text()
+    if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ error: 'PAYLOAD_TOO_LARGE' }, 413)
+    try {
+      body = JSON.parse(rawBody)
+    } catch {
+      return jsonResponse({ error: 'INVALID_JSON' }, 400)
+    }
   }
 
   try {
@@ -99,8 +150,25 @@ async function handleAiRequest(request, env, pathname) {
         return jsonResponse({ error: 'INVALID_SESSION_INPUT' }, 400)
       }
       const appId = env.BAILIAN_SESSION_APP_ID || DEFAULT_SESSION_APP_ID
-      const result = await callBailian(env, appId, body.query)
-      return jsonResponse(result)
+      const result = await callAsyncSession(env, appId, '', body.query)
+      if (typeof result?.id !== 'string' || typeof result?.status !== 'string') {
+        throw new Error('INVALID_BAILIAN_RESPONSE')
+      }
+      return jsonResponse({ taskId: result.id, status: result.status }, 202)
+    }
+
+    if (sessionTaskMatch) {
+      const taskId = sessionTaskMatch[1]
+      if (!/^[A-Za-z0-9_-]{10,128}$/.test(taskId)) {
+        return jsonResponse({ error: 'INVALID_SESSION_TASK_ID' }, 400)
+      }
+      const appId = env.BAILIAN_SESSION_APP_ID || DEFAULT_SESSION_APP_ID
+      const result = await callAsyncSession(env, appId, taskId)
+      if (['queued', 'in_progress', 'running'].includes(result?.status)) {
+        return jsonResponse({ taskId, status: result.status }, 202)
+      }
+      if (result?.status !== 'completed') throw new Error('AI_SESSION_TASK_FAILED')
+      return jsonResponse(extractAsyncOutput(result))
     }
 
     const required = ['patientJson', 'stateJson', 'recordsJson']
@@ -126,6 +194,7 @@ export default {
     if (
       pathname === '/api/ai/patient' ||
       pathname === '/api/ai/session' ||
+      pathname.startsWith('/api/ai/session/') ||
       pathname === '/api/ai/report'
     ) {
       return handleAiRequest(request, env, pathname)

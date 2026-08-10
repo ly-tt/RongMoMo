@@ -32,7 +32,8 @@ DASHSCOPE_WORKSPACE_ID=<workspace id>
 函数会为每次 AI 请求生成 `requestId`，并输出单行 JSON 结构化日志：
 
 - `request_started`：开始调用
-- `ai_completed`：百炼调用成功，包含耗时和 token usage
+- `ai_completed`：同步百炼调用成功，包含耗时和 token usage
+- `ai_async_upstream_failed`：异步任务提交或查询失败
 - `ai_response_invalid`：模型输出缺字段或不是合法 JSON
 - `request_failed`：代理最终返回错误
 
@@ -54,7 +55,10 @@ GET /health
 AI routes:
 
 ```text
-POST /api/ai/session  # 完整疗程：患者、挑战、对白库和第三针事件
+POST /api/ai/session            # 提交完整疗程异步任务，立即返回 taskId
+GET  /api/ai/session/{taskId}   # 查询任务；处理中返回 202，完成后返回疗程 JSON
 POST /api/ai/patient  # 旧患者工作流，保留用于人工回滚
 POST /api/ai/report   # 五针结束后的疗程总结
 ```
+
+前端每 5 秒查询一次，最长等待 100 秒。生成结果只缓存为“下一局”，不会替换正在显示或游玩的患者。
